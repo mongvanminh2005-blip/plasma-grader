@@ -7,6 +7,7 @@ const GRADES = [
   { g: 4, label: 'Đục nặng' },
 ];
 const BUCKET = 'plasma';
+let rawBusy = false;      // đang chuyển RAW → JPEG
 const MAX_SIDE = 1600;      // cạnh dài tối đa khi nén ảnh
 const JPEG_QUALITY = 0.88;
 const PARALLEL = 4;         // số ảnh tải lên song song
@@ -120,7 +121,7 @@ async function startApp(user) {
   state.scope = state.isAdmin ? (localStorage.getItem('pg-scope') || 'me') : 'me';
   $('#adminBtn').classList.toggle('hidden', !state.isAdmin);
   $('#scopeBox').classList.toggle('hidden', !state.isAdmin);
-  if (state.isAdmin) await loadUsers().catch(() => {});
+  if (state.isAdmin) await loadUsers().catch(e => { console.error(e); renderScope(); });
   connectLive();
   await loadBatches();
   const saved = Number(localStorage.getItem('batchId'));
@@ -246,6 +247,9 @@ function renderAll() {
   const other = b.user_id !== state.user.id;
   $('#batchMeta').textContent = `${total} ảnh · tạo ngày ${dateStr(b.created_at)}` + (other ? ` · của tài khoản ${b.owner || '?'}` : '');
   $('#addToBatch').classList.toggle('hidden', other);
+  const raws = state.images.filter(i => RAW_EXT.test(i.storage_path));
+  $('#rawBanner').classList.toggle('hidden', !raws.length || rawBusy);
+  if (raws.length) $('#rawText').textContent = `${raws.length} ảnh đang lưu ở dạng RAW (trình duyệt không hiển thị được và tốn dung lượng). Chuyển sang JPEG để xem, chấm và giải phóng dung lượng — kết quả đã chấm được giữ nguyên.`;
   $('#progressText').textContent = `${graded}/${total}`;
   $('#progressBar').style.width = (total ? graded / total * 100 : 0) + '%';
 
@@ -272,7 +276,7 @@ function renderThumbs() {
   const v = view(), box = $('#thumbs');
   if (!v.length) { box.innerHTML = '<div class="none-msg">Không có ảnh nào trong bộ lọc này</div>'; return; }
   box.innerHTML = v.map(i => `
-    <div class="thumb ${i.id === state.currentId ? 'current' : ''}" data-id="${i.id}" title="${esc(i.rel_path)}">
+    <div class="thumb ${i.id === state.currentId ? 'current' : ''} ${RAW_EXT.test(i.storage_path) ? 'raw' : ''}" data-id="${i.id}" title="${esc(i.rel_path)}">
       <img loading="lazy" src="${esc(urlOf(i))}" alt="" />
       <button class="del" data-del="${i.id}" title="Xoá ảnh">✕</button>
       ${i.grade === null ? '<span class="badge none">–</span>' : `<span class="badge" data-g="${i.grade}">${i.grade}</span>`}
@@ -732,6 +736,48 @@ async function handleFiles(list) {
   } catch (e) { toast(e.message); $('#uploadLabel').textContent = '⚠ ' + e.message; }
   setTimeout(() => prog.classList.add('hidden'), 2000);
 }
+
+
+// ---------- chuyển ảnh RAW đã tải lên trước đây sang JPEG ----------
+$('#rawConvert').onclick = async () => {
+  const raws = state.images.filter(i => RAW_EXT.test(i.storage_path));
+  if (!raws.length || rawBusy) return;
+  rawBusy = true; $('#rawBanner').classList.add('hidden');
+  const prog = $('#uploadProgress'); prog.classList.remove('hidden');
+  let done = 0, failed = 0;
+  const setP = () => {
+    $('#uploadBar').style.width = Math.round(done / raws.length * 100) + '%';
+    $('#uploadPct').textContent = Math.round(done / raws.length * 100) + '%';
+    $('#uploadLabel').textContent = `Đang chuyển RAW → JPEG ${done}/${raws.length}…`;
+  };
+  setP();
+  await signUrls(raws);
+  let next = 0;
+  const worker = async () => {
+    while (next < raws.length) {
+      const img = raws[next++];
+      try {
+        const res = await fetch(urlOf(img));
+        if (!res.ok) throw new Error('Không tải được ' + img.rel_path);
+        const file = new File([await res.blob()], img.filename);
+        const { blob } = await prepare(file);
+        const folder = img.storage_path.split('/').slice(0, -1).join('/');
+        const path = `${folder}/${crypto.randomUUID()}.jpg`;
+        check(await sb.storage.from(BUCKET).upload(path, blob, { contentType: 'image/jpeg', upsert: false }));
+        check(await sb.from('images').update({ storage_path: path }).eq('id', img.id));
+        await sb.storage.from(BUCKET).remove([img.storage_path]);
+        img.storage_path = path;
+      } catch (e) { failed++; console.error(img.rel_path, e); }
+      done++; setP();
+    }
+  };
+  await Promise.all([worker(), worker()]);
+  rawBusy = false;
+  $('#uploadLabel').textContent = failed ? `Xong – ${failed} ảnh lỗi` : 'Đã chuyển xong';
+  setTimeout(() => prog.classList.add('hidden'), 2000);
+  toast(failed ? `Đã chuyển ${raws.length - failed} ảnh, ${failed} ảnh lỗi` : `Đã chuyển ${raws.length} ảnh RAW sang JPEG`);
+  await refreshImages(); loadBatches();
+};
 
 // ---------- boot ----------
 if (sb) {

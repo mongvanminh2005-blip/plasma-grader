@@ -88,12 +88,12 @@ language plpgsql stable security definer set search_path = '' as $$
 begin
   if not public.is_admin() then raise exception 'Chỉ quản trị viên được dùng chức năng này'; end if;
   return query
-    select u.id, coalesce(p.username, split_part(u.email, '@', 1)), u.email::text, u.created_at, u.last_sign_in_at,
+    select u.id, coalesce(p.username, split_part(u.email, '@', 1))::text, u.email::text, u.created_at, u.last_sign_in_at,
            exists (select 1 from public.admins a where a.user_id = u.id),
            (select count(*)::int from public.batches b where b.user_id = u.id),
            (select count(*)::int from public.images i where i.user_id = u.id),
            (select count(i.grade)::int from public.images i where i.user_id = u.id),
-           (select coalesce(sum((o.metadata->>'size')::bigint), 0) from storage.objects o
+           (select coalesce(sum((o.metadata->>'size')::bigint), 0)::bigint from storage.objects o
               where o.bucket_id = 'plasma' and (storage.foldername(o.name))[1] = u.id::text)
     from auth.users u left join public.profiles p on p.id = u.id
     order by u.created_at;
