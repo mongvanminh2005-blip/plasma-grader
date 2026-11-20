@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath d=%27M16 2C16 2 6 14 6 20a10 10 0 0 0 20 0C26 14 16 2 16 2z%27 fill=%27%23e9a93a%27/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="style.css?v=3" />
+  <link rel="stylesheet" href="style.css?v=4" />
 </head>
 <body>
   <!-- ========== AUTH ========== -->
@@ -26,8 +26,8 @@
         <button class="tab" data-mode="register">Tạo tài khoản</button>
       </div>
       <form id="authForm" autocomplete="on">
-        <label>Email
-          <input name="email" type="email" required autocomplete="email" placeholder="vd: ten@gmail.com" />
+        <label>Tên đăng nhập
+          <input name="username" required minlength="3" maxlength="32" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="vd: minh.bme4" />
         </label>
         <label>Mật khẩu
           <input name="password" type="password" required minlength="6" autocomplete="current-password" placeholder="Tối thiểu 6 ký tự" />
@@ -35,6 +35,7 @@
         <label class="confirm hidden">Nhập lại mật khẩu
           <input name="confirm" type="password" minlength="6" autocomplete="new-password" />
         </label>
+        <label class="remember"><input type="checkbox" name="remember" checked /> Ghi nhớ đăng nhập trên máy này</label>
         <p id="authError" class="error"></p>
         <button class="btn primary block" type="submit" id="authSubmit">Đăng nhập</button>
       </form>
@@ -150,7 +151,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="config.js?v=3"></script>
-  <script src="app.js?v=3"></script>
+  <script src="config.js?v=4"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>

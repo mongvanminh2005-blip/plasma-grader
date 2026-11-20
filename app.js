@@ -16,7 +16,22 @@ const $ = s => document.querySelector(s);
 const cfg = window.PG_CONFIG || {};
 const configured = /^https:\/\/.+\.supabase\.co/.test(cfg.SUPABASE_URL || '') && cfg.SUPABASE_ANON_KEY && !cfg.SUPABASE_ANON_KEY.startsWith('DAN_');
 if (!configured) $('#setupNote').classList.remove('hidden');
-const sb = configured ? window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY) : null;
+// "Ghi nhớ đăng nhập": lưu phiên vào localStorage (giữ lâu) hoặc sessionStorage (mất khi đóng trình duyệt)
+const REMEMBER_KEY = 'pg-remember';
+const authStorage = {
+  store: () => (localStorage.getItem(REMEMBER_KEY) === '0' ? sessionStorage : localStorage),
+  getItem: k => authStorage.store().getItem(k),
+  setItem: (k, v) => authStorage.store().setItem(k, v),
+  removeItem: k => { localStorage.removeItem(k); sessionStorage.removeItem(k); },
+};
+const sb = configured ? window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, {
+  auth: { storage: authStorage, persistSession: true, autoRefreshToken: true },
+}) : null;
+
+// Tài khoản dùng tên đăng nhập; bên trong Supabase lưu dưới dạng email nội bộ (không gửi thư)
+const USER_DOMAIN = 'users.plasma-grader.app';
+const toEmail = u => (u.includes('@') ? u : `${u}@${USER_DOMAIN}`).toLowerCase();
+const displayName = email => (email || '').endsWith('@' + USER_DOMAIN) ? email.split('@')[0] : (email || '');
 
 const state = { mode: 'login', user: null, batches: [], batchId: null, images: [], currentId: null, filter: 'all', channel: null, urls: new Map() };
 
@@ -32,9 +47,10 @@ const dateStr = iso => new Date(iso).toLocaleDateString('vi-VN');
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 function check({ data, error }) { if (error) throw new Error(viError(error.message)); return data; }
 function viError(m = '') {
-  if (/Invalid login credentials/i.test(m)) return 'Sai email hoặc mật khẩu';
-  if (/already registered|already exists/i.test(m)) return 'Email này đã có tài khoản';
-  if (/Email not confirmed/i.test(m)) return 'Email chưa được xác nhận – kiểm tra hộp thư';
+  if (/Invalid login credentials/i.test(m)) return 'Sai tên đăng nhập hoặc mật khẩu';
+  if (/already registered|already exists/i.test(m)) return 'Tên đăng nhập này đã có người dùng';
+  if (/Email not confirmed/i.test(m)) return 'Tài khoản chưa được xác nhận – cần tắt "Confirm email" trong Supabase';
+  if (/invalid format|Unable to validate email/i.test(m)) return 'Tên đăng nhập không hợp lệ';
   if (/Password should be/i.test(m)) return 'Mật khẩu tối thiểu 6 ký tự';
   if (/rate limit/i.test(m)) return 'Thao tác quá nhanh, vui lòng thử lại sau ít phút';
   if (/Failed to fetch|NetworkError/i.test(m)) return 'Mất kết nối mạng';
@@ -72,14 +88,17 @@ $('#authForm').onsubmit = async e => {
   if (state.mode === 'register' && f.password.value !== f.confirm.value) return (err.textContent = 'Mật khẩu nhập lại không khớp');
   $('#authSubmit').disabled = true;
   try {
-    const creds = { email: f.email.value.trim(), password: f.password.value };
+    const name = f.username.value.trim().toLowerCase();
+    if (!name.includes('@') && !/^[a-z0-9](?:[a-z0-9_-]|\.(?!\.)){1,30}[a-z0-9]$/.test(name)) throw new Error('Tên đăng nhập 3–32 ký tự, chỉ gồm chữ không dấu, số và _ . -');
+    localStorage.setItem(REMEMBER_KEY, f.remember.checked ? '1' : '0');
+    const creds = { email: toEmail(name), password: f.password.value };
     if (state.mode === 'register') {
       const data = check(await sb.auth.signUp(creds));
       if (!data.session && !(await sb.auth.signInWithPassword(creds)).error) return; // đăng nhập luôn nếu không cần xác nhận
       if (!data.session) {
         err.style.color = 'var(--accent)';
-        err.textContent = 'Đã tạo tài khoản! Kiểm tra email để xác nhận rồi đăng nhập.';
-        setMode('login'); f.email.value = creds.email;
+        err.textContent = 'Đã tạo tài khoản nhưng hệ thống đang yêu cầu xác nhận email – báo quản trị viên tắt "Confirm email".';
+        setMode('login'); f.username.value = name;
       }
     } else {
       check(await sb.auth.signInWithPassword(creds));
@@ -94,7 +113,7 @@ async function startApp(user) {
   if (state.user?.id === user.id && !$('#app').classList.contains('hidden')) return;
   state.user = user;
   $('#auth').classList.add('hidden'); $('#app').classList.remove('hidden');
-  $('#username').textContent = user.email; $('#avatar').textContent = (user.email || '?')[0];
+  const dn = displayName(user.email); $('#username').textContent = dn; $('#avatar').textContent = (dn || '?')[0];
   buildGradeButtons();
   connectLive();
   await loadBatches();
