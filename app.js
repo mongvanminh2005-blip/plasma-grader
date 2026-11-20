@@ -308,7 +308,7 @@ function showCurrent() {
   if (document.activeElement !== $('#note')) $('#note').value = img.note || '';
   setSave(img.graded_at ? 'ok' : '', img.graded_at ? 'Đã lưu lúc ' + timeStr(img.graded_at) : 'Chưa chấm');
   renderGradeSelection();
-  if (seg.shownId !== img.id) { seg.shownId = img.id; seg.sel = -1; seg.drawing = null; updateDrawBtn(); }
+  if (seg.shownId !== img.id) { seg.shownId = img.id; seg.sel = -1; seg.drawing = null; seg.pan = [0, 0]; updateDrawBtn(); }
   renderOverlay();
   if (!seg.busy.has(img.id)) setSeg('', segSummary(img));
   maybeAutoSeg();
@@ -395,7 +395,7 @@ async function deleteImage(id) {
 
 $('#prevBtn').onclick = () => step(-1);
 $('#nextBtn').onclick = () => step(1);
-$('#mainImg').onclick = () => { $('#lightImg').src = $('#mainImg').src; $('#lightbox').classList.remove('hidden'); };
+
 $('#lightbox').onclick = () => $('#lightbox').classList.add('hidden');
 
 document.addEventListener('keydown', e => {
@@ -405,7 +405,7 @@ document.addEventListener('keydown', e => {
     return;
   }
   if (seg.editing && handleSegKey(e)) return;
-  if ((e.key === 'z' || e.key === 'Z') && !e.ctrlKey && !e.metaKey) return $('#segZoom').click();
+  if ((e.key === 'z' || e.key === 'Z') && !e.ctrlKey && !e.metaKey) return setZoom(seg.zoomMode === 'fit' ? 3 : 'fit');
   if (e.key === 'Escape') return $('#lightbox').classList.add('hidden');
   if (GRADES.some(x => String(x.g) === e.key)) { e.preventDefault(); setGrade(Number(e.key)); }
   else if (e.key === 'ArrowRight') step(1);
@@ -966,14 +966,22 @@ function renderOverlay() {
   const W = el.naturalWidth, H = el.naturalHeight;
   svg.classList.toggle('editing', seg.editing); svg.classList.toggle('drawing', !!seg.drawing);
   renderLegend();
-  if (!segOn()) { svg.innerHTML = ''; $('#zoomer').style.transform = ''; $('#zoomer').style.setProperty('--zf', 1); return; }
-  if (!img || !W || !H || el.getAttribute('src') !== urlOf(img) || !el.complete) { svg.innerHTML = ''; $('#zoomer').style.transform = ''; return; }
+  if (!segOn()) { svg.innerHTML = ''; applyZoom(); return; }
+  if (!img || !W || !H || el.getAttribute('src') !== urlOf(img) || !el.complete) { svg.innerHTML = ''; applyZoom(); return; }
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   applyZoom();
   const rect = svg.getBoundingClientRect();
   const upp = Math.max(W / (rect.width || W), H / (rect.height || H)); // đơn vị ảnh trên mỗi pixel màn hình
   const regs = img.regions || [];
   let html = '';
+  const tubeRegs = regs.filter(r => r.pts?.length);
+  if (tubeRegs.length && !seg.hidden.has('blackout')) {
+    const poly = r => r.pts.map(([x, y]) => `${(x * W).toFixed(1)},${(y * H).toFixed(1)}`).join(' ');
+    html += `<defs><mask id="tubeMask" maskUnits="userSpaceOnUse" x="${-W}" y="${-H}" width="${3 * W}" height="${3 * H}">
+      <rect x="${-W}" y="${-H}" width="${3 * W}" height="${3 * H}" fill="#fff"/>
+      ${tubeRegs.map(r => `<polygon class="m" points="${poly(r)}" style="fill:#000;fill-opacity:1;stroke:#000;stroke-opacity:1;stroke-width:${(3 * upp).toFixed(1)}px" stroke-linejoin="round"/>`).join('')}
+    </mask></defs><rect class="blackout" x="${-W}" y="${-H}" width="${3 * W}" height="${3 * H}" mask="url(#tubeMask)"/>`;
+  }
   regs.forEach((r, i) => {
     if (seg.hidden.has(r.name) || !r.pts?.length) return;
     const c = regClass(r);
@@ -1006,7 +1014,8 @@ function renderLegend() {
   const img = current(), counts = {};
   (img?.regions || []).forEach(r => { counts[r.name] = (counts[r.name] || 0) + 1; });
   if ((img?.regions || []).length) counts.tube = 1;
-  $('#segLegend').innerHTML = [TUBE_LAYER, ...REGION_CLASSES].map(c =>
+  if ((img?.regions || []).length) counts.blackout = '';
+  $('#segLegend').innerHTML = [{ name: 'blackout', label: 'Nền đen', hex: '#000' }, TUBE_LAYER, ...REGION_CLASSES].map(c =>
     `<button class="seg-chip ${seg.hidden.has(c.name) ? 'off' : ''}" data-n="${c.name}" title="Bật/tắt hiển thị ${c.label}"><i style="background:${c.hex}"></i>${c.label}${counts[c.name] ? `<span class="c">${counts[c.name]}</span>` : ''}</button>`).join('');
   $('#segLegend').querySelectorAll('.seg-chip').forEach(b => b.onclick = () => {
     seg.hidden.has(b.dataset.n) ? seg.hidden.delete(b.dataset.n) : seg.hidden.add(b.dataset.n);
@@ -1093,26 +1102,85 @@ $('#overlay').addEventListener('pointerup', e => {
 $('#overlay').addEventListener('dblclick', e => { if (seg.drawing) { e.preventDefault(); finishDraw(); } });
 
 
-// ----- phóng to vào ống nghiệm -----
-seg.zoom = localStorage.getItem('pg-seg-zoom') !== '0';
-function applyZoom() {
-  const z = $('#zoomer'), img = current(), el = $('#mainImg'), st = $('#stage');
-  const regs = (img?.regions || []).filter(r => r.pts?.length);
-  $('#segZoom').classList.toggle('active', seg.zoom);
-  if (!seg.zoom || !regs.length || !el.naturalWidth) { z.style.transform = ''; z.style.setProperty('--zf', 1); return; }
+// ----- phóng to / di chuyển ảnh -----
+// mức phóng: 'fit' = vừa ống nghiệm, hoặc số lần so với cả ảnh vừa khung (mặc định 3×), tâm = tâm ống nghiệm (hoặc tâm ảnh)
+seg.zoomMode = localStorage.getItem('pg-zoom') || '3';
+seg.pan = [0, 0];
+let lastZoom = { f: 1 };
+function zoomTarget() {
+  const img = current(), el = $('#mainImg'), st = $('#stage');
   const W = el.naturalWidth, H = el.naturalHeight, sw = st.clientWidth, sh = st.clientHeight;
+  if (!W || !H) return null;
   const k = Math.min(sw / W, sh / H), ox = (sw - W * k) / 2, oy = (sh - H * k) / 2;
-  let [x1, y1, x2, y2] = bboxOf(regs.flatMap(r => r.pts));
-  x1 = ox + x1 * W * k; x2 = ox + x2 * W * k; y1 = oy + y1 * H * k; y2 = oy + y2 * H * k;
-  const pad = 0.12 * Math.max(x2 - x1, y2 - y1);
-  const bw = x2 - x1 + 2 * pad, bh = y2 - y1 + 2 * pad;
-  const f = Math.max(1, Math.min(sw / bw, sh / bh, 10));
-  const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
-  z.style.transform = `translate(${sw / 2 - cx * f}px, ${sh / 2 - cy * f}px) scale(${f})`;
-  z.style.setProperty('--zf', f);
+  const regs = segOn() ? (img?.regions || []).filter(r => r.pts?.length) : [];
+  let cx = sw / 2, cy = sh / 2, f;
+  if (regs.length) {
+    let [x1, y1, x2, y2] = bboxOf(regs.flatMap(r => r.pts));
+    x1 = ox + x1 * W * k; x2 = ox + x2 * W * k; y1 = oy + y1 * H * k; y2 = oy + y2 * H * k;
+    cx = (x1 + x2) / 2; cy = (y1 + y2) / 2;
+    if (seg.zoomMode === 'fit') {
+      const pad = 0.08 * Math.max(x2 - x1, y2 - y1);
+      f = Math.max(1, Math.min(sw / (x2 - x1 + 2 * pad), sh / (y2 - y1 + 2 * pad), 12));
+    }
+  }
+  if (!f) f = seg.zoomMode === 'fit' ? 1 : Number(seg.zoomMode) || 1;
+  return { f, cx, cy, sw, sh };
 }
+function applyZoom() {
+  const z = $('#zoomer'), t = zoomTarget();
+  const hasRegs = segOn() && (current()?.regions || []).some(r => r.pts?.length);
+  $('#zoomCtl').querySelectorAll('button').forEach(b => {
+    b.classList.toggle('active', b.dataset.z === seg.zoomMode);
+    if (b.dataset.z === 'fit') b.disabled = !hasRegs;
+  });
+  if (!t) { z.style.transform = ''; z.style.setProperty('--zf', 1); return; }
+  const { f, cx, cy, sw, sh } = t;
+  // giới hạn kéo để ảnh không trôi hẳn ra ngoài
+  const lim = Math.max(sw, sh) * f / 2;
+  seg.pan = seg.pan.map(v => Math.max(-lim, Math.min(lim, v)));
+  z.style.transform = `translate(${sw / 2 - cx * f + seg.pan[0]}px, ${sh / 2 - cy * f + seg.pan[1]}px) scale(${f})`;
+  z.style.setProperty('--zf', f);
+  lastZoom = { f };
+}
+function setZoom(mode) {
+  seg.zoomMode = String(mode); seg.pan = [0, 0];
+  localStorage.setItem('pg-zoom', seg.zoomMode);
+  applyZoom();
+}
+$('#zoomCtl').querySelectorAll('button').forEach(b => b.onclick = e => { e.stopPropagation(); setZoom(b.dataset.z); });
 $('#zoomer').addEventListener('transitionend', () => renderOverlay());
-$('#segZoom').onclick = () => { seg.zoom = !seg.zoom; localStorage.setItem('pg-seg-zoom', seg.zoom ? '1' : '0'); applyZoom(); };
+window.addEventListener('resize', debounce(applyZoom, 100));
+
+// kéo để di chuyển, lăn chuột để phóng
+(() => {
+  const st = $('#stage'); let drag = null;
+  st.addEventListener('pointerdown', e => {
+    if (seg.editing || e.button !== 0 || e.target.closest('.nav, .zoom-ctl, .counter')) return;
+    drag = { x: e.clientX, y: e.clientY, pan: [...seg.pan], moved: false };
+    st.setPointerCapture(e.pointerId);
+  });
+  st.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+    drag.moved = true; st.classList.add('dragging');
+    seg.pan = [drag.pan[0] + dx, drag.pan[1] + dy]; applyZoom();
+  });
+  const end = () => { if (!drag) return; if (drag.moved) renderOverlay(); drag = null; st.classList.remove('dragging'); };
+  st.addEventListener('pointerup', end); st.addEventListener('pointercancel', end);
+  st.addEventListener('dblclick', e => { if (seg.editing || e.target.closest('.nav, .zoom-ctl')) return; seg.pan = [0, 0]; applyZoom(); });
+  st.addEventListener('wheel', e => {
+    if (seg.editing && seg.drawing) return;
+    e.preventDefault();
+    const levels = [1, 1.5, 2, 3, 4, 6, 8];
+    const cur = seg.zoomMode === 'fit' ? lastZoom.f : Number(seg.zoomMode);
+    let i = levels.findIndex(v => v >= cur - 0.01); if (i < 0) i = levels.length - 1;
+    i = Math.max(0, Math.min(levels.length - 1, i + (e.deltaY < 0 ? 1 : -1)));
+    seg.zoomMode = String(levels[i]); localStorage.setItem('pg-zoom', seg.zoomMode);
+    seg.pan = seg.pan.map(v => v * levels[i] / (cur || 1));
+    applyZoom(); setTimeout(renderOverlay, 260);
+  }, { passive: false });
+})();
 
 // ---------- boot ----------
 if (sb) {

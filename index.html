@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath d=%27M16 2C16 2 6 14 6 20a10 10 0 0 0 20 0C26 14 16 2 16 2z%27 fill=%27%23e9a93a%27/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="style.css?v=11" />
+  <link rel="stylesheet" href="style.css?v=12" />
 </head>
 <body>
   <!-- ========== AUTH ========== -->
@@ -128,7 +128,11 @@
                 <button class="nav prev" id="prevBtn" title="Ảnh trước (←)">‹</button>
                 <button class="nav next" id="nextBtn" title="Ảnh sau (→)">›</button>
                 <span class="counter" id="counter"></span>
-                <span class="zoom-hint">Bấm vào ảnh để phóng to</span>
+                <div class="zoom-ctl" id="zoomCtl">
+                  <button data-z="fit" title="Vừa khung ống nghiệm">Vừa ống</button>
+                  <button data-z="1">1×</button><button data-z="2">2×</button><button data-z="3">3×</button><button data-z="4">4×</button>
+                </div>
+                <span class="zoom-hint">Kéo để di chuyển · lăn chuột để phóng · bấm đúp để về giữa</span>
               </div>
               <div class="img-info">
                 <div class="fname" id="fname"></div>
@@ -140,7 +144,6 @@
                 <div class="seg-legend" id="segLegend"></div>
                 <div class="seg-actions">
                   <span class="seg-status" id="segStatus"></span>
-                  <button class="btn outline sm" id="segZoom" title="Phóng to vào ống nghiệm (phím Z)">🔍 Phóng to ống</button>
                   <button class="btn outline sm" id="segRun" title="Chạy AI khoanh vùng cho ảnh này">✦ Khoanh vùng AI</button>
                   <button class="btn outline sm" id="segEdit" title="Kéo điểm, xoá hoặc vẽ thêm vùng">✎ Chỉnh sửa</button>
                   <button class="btn outline sm" id="segBatch" title="Khoanh các ảnh chưa có vùng trong lô">Khoanh cả lô</button>
@@ -206,8 +209,8 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="config.js?v=11"></script>
-  <script src="seg.js?v=11"></script>
-  <script src="app.js?v=11"></script>
+  <script src="config.js?v=12"></script>
+  <script src="seg.js?v=12"></script>
+  <script src="app.js?v=12"></script>
 </body>
 </html>
