@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Plasma Grader — Phân độ huyết tương</title>
+  <title>Plasma Grader — Phân loại huyết tương</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath d=%27M16 2C16 2 6 14 6 20a10 10 0 0 0 20 0C26 14 16 2 16 2z%27 fill=%27%23e9a93a%27/%3E%3C/svg%3E" />
@@ -14,11 +14,10 @@
   <section id="auth" class="auth hidden">
     <div class="auth-art">
       <div class="brand big"><span class="drop"></span>Plasma Grader</div>
-      <h1>Phân độ đậm đặc huyết tương<br />nhanh, gọn, lưu tức thì.</h1>
-      <p>Tải một ảnh hoặc cả thư mục, chọn độ từ 0 đến 5 — kết quả được lưu ngay lập tức và đồng bộ trên mọi thiết bị bạn đăng nhập.</p>
+      <h1>Phân loại huyết tương</h1>
       <div class="scale-demo">
         <span data-g="0">0</span><span data-g="1">1</span><span data-g="2">2</span>
-        <span data-g="3">3</span><span data-g="4">4</span><span data-g="5">5</span>
+        <span data-g="3">3</span><span data-g="4">4</span>
       </div>
     </div>
     <div class="auth-card">
@@ -83,7 +82,7 @@
         <div class="empty" id="emptyState">
           <div class="empty-illu"><span></span><span></span><span></span></div>
           <h2>Chưa có lô ảnh nào</h2>
-          <p>Tải lên một ảnh hoặc cả thư mục để bắt đầu phân độ.</p>
+          <p>Tải lên một ảnh hoặc cả thư mục để bắt đầu phân loại.</p>
         </div>
 
         <div class="workspace hidden" id="workspace">
@@ -122,7 +121,7 @@
               </div>
 
               <div class="grade-panel">
-                <div class="gp-label">Chọn độ đậm đặc <span class="muted">— phím tắt 0–5</span></div>
+                <div class="gp-label">Chọn độ <span class="muted">— phím tắt 0–4</span></div>
                 <div class="grades" id="grades"></div>
                 <div class="gp-foot">
                   <label class="switch"><input type="checkbox" id="autoNext" checked /><span></span> Tự chuyển ảnh tiếp theo</label>

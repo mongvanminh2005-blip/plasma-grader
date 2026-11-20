@@ -1,11 +1,10 @@
 // ===== Cấu hình nhãn độ (có thể sửa tuỳ quy ước của phòng xét nghiệm) =====
 const GRADES = [
-  { g: 0, label: 'Không' },
-  { g: 1, label: 'Rất nhẹ' },
-  { g: 2, label: 'Nhẹ' },
-  { g: 3, label: 'Trung bình' },
-  { g: 4, label: 'Đậm' },
-  { g: 5, label: 'Rất đậm' },
+  { g: 0, label: 'Trong' },
+  { g: 1, label: 'Đục nhẹ' },
+  { g: 2, label: 'Đục vừa' },
+  { g: 3, label: 'Đục rõ' },
+  { g: 4, label: 'Đục nặng' },
 ];
 const BUCKET = 'plasma';
 const MAX_SIDE = 1600;      // cạnh dài tối đa khi nén ảnh
@@ -358,7 +357,7 @@ document.addEventListener('keydown', e => {
     return;
   }
   if (e.key === 'Escape') return $('#lightbox').classList.add('hidden');
-  if (/^[0-5]$/.test(e.key)) { e.preventDefault(); setGrade(Number(e.key)); }
+  if (GRADES.some(x => String(x.g) === e.key)) { e.preventDefault(); setGrade(Number(e.key)); }
   else if (e.key === 'ArrowRight') step(1);
   else if (e.key === 'ArrowLeft') step(-1);
   else if (e.key === 'Backspace' || e.key === 'Delete') setGrade(null);
