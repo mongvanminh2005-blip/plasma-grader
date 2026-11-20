@@ -75,6 +75,7 @@ $('#authForm').onsubmit = async e => {
     const creds = { email: f.email.value.trim(), password: f.password.value };
     if (state.mode === 'register') {
       const data = check(await sb.auth.signUp(creds));
+      if (!data.session && !(await sb.auth.signInWithPassword(creds)).error) return; // đăng nhập luôn nếu không cần xác nhận
       if (!data.session) {
         err.style.color = 'var(--accent)';
         err.textContent = 'Đã tạo tài khoản! Kiểm tra email để xác nhận rồi đăng nhập.';
