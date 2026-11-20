@@ -462,16 +462,6 @@ table.matrix td.self, table.matrix td.na { background: #f3f5f7; color: var(--mut
 .backup-body p { margin: 0; }
 .muted.small { font-size: 12px; }
 
-/* ---------- Kappa ---------- */
-.card.stat { cursor: help; }
-.qm { display: inline-grid; place-items: center; width: 14px; height: 14px; border-radius: 50%; background: #eef1f4; font-size: 10px; color: var(--muted); }
-.klabel { font-size: 11.5px; font-weight: 600; display: inline-block; padding: 1px 7px; border-radius: 6px; margin: 2px 0 4px; width: fit-content; }
-.klabel.na { background: #f3f5f7; color: var(--muted); }
-.poor { background: #fde8e8; color: #9b1c1c; } .fair { background: #fff1db; color: #8a5300; } .mod { background: #fbf6d6; color: #6b5a00; }
-.good { background: #e3f4ea; color: #166534; } .great { background: #d3efe9; color: #0b5f59; }
-.seg-toggle { display: inline-flex; background: #f0f3f6; border-radius: 9px; padding: 3px; gap: 2px; }
-.seg-toggle button { border: 0; background: transparent; font-size: 12px; font-weight: 600; color: var(--muted); padding: 5px 10px; border-radius: 7px; }
-.seg-toggle button.active { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
-.matrix-note { font-size: 12px; padding: 10px 16px 0; }
-.kappa-legend { font-size: 11.5px; color: var(--muted); padding: 0 16px 14px; line-height: 2; }
-.kappa-legend span { padding: 1px 6px; border-radius: 5px; margin-right: 2px; white-space: nowrap; }
+
+#sumCards { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 900px) { #sumCards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

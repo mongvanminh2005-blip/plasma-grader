@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath d=%27M16 2C16 2 6 14 6 20a10 10 0 0 0 20 0C26 14 16 2 16 2z%27 fill=%27%23e9a93a%27/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="style.css?v=19" />
+  <link rel="stylesheet" href="style.css?v=20" />
 </head>
 <body>
   <!-- ========== AUTH ========== -->
@@ -130,7 +130,7 @@
               <span class="muted" id="batchMeta"></span>
             </div>
             <div class="ws-actions">
-              <label class="switch shared-sw" id="sharedBox" title="Lô chung: mọi tài khoản xem và chấm được; lô riêng: chỉ bạn"><input type="checkbox" id="batchShared" /><span></span> Lô chung</label>
+              <label class="switch shared-sw" id="sharedBox" title="Lô chung: mọi tài khoản xem và phân loại được; lô riêng: chỉ bạn"><input type="checkbox" id="batchShared" /><span></span> Lô chung</label>
               <button class="btn outline sm" id="addToBatch">+ Thêm ảnh vào lô</button>
               <button class="btn outline sm" id="exportBatch">Xuất CSV</button>
               <button class="btn danger-ghost sm" id="deleteBatch" title="Chuyển lô vào thùng rác (khôi phục được trong 30 ngày)">Xoá lô</button>
@@ -221,8 +221,8 @@
         </div>
         <section class="summary hidden" id="summaryPanel">
           <div class="ws-head">
-            <div class="ws-title"><h2 class="admin-title">Tổng kết chấm điểm</h2>
-              <span class="muted">So sánh cách mọi người chấm trên cùng ảnh</span></div>
+            <div class="ws-title"><h2 class="admin-title">Tổng kết phân loại</h2>
+              <span class="muted">Mọi người phân loại các ảnh như thế nào</span></div>
             <div class="ws-actions">
               <select id="sumBatch" class="sum-select"></select>
               <button class="btn outline sm" id="sumRefresh">↻ Làm mới</button>
@@ -232,24 +232,15 @@
           <div id="sumBody">
             <div class="cards" id="sumCards"></div>
             <div class="panel">
-              <div class="panel-head"><h3>Theo người chấm</h3><div class="lgs" id="sumRaterLegend"></div></div>
+              <div class="panel-head"><h3>Theo người phân loại</h3><div class="lgs" id="sumRaterLegend"></div></div>
               <div class="table-wrap"><table class="users sum-raters">
-                <thead><tr><th>Người chấm</th><th class="num">Số ảnh</th><th>Phân bố độ</th><th class="num" title="Không tính độ 5">Độ trung bình</th><th class="num" title="Tỉ lệ chọn trùng với độ được chọn nhiều nhất trên các ảnh có ≥ 2 người chấm">Trùng đa số</th></tr></thead>
+                <thead><tr><th>Người phân loại</th><th class="num">Số ảnh</th><th>Phân bố độ</th></tr></thead>
                 <tbody id="sumRaters"></tbody>
               </table></div>
             </div>
-            <div class="sum-grid">
-              <div class="panel">
-                <div class="panel-head"><h3>Đồng thuận từng cặp</h3>
-                  <div class="seg-toggle" id="sumMetric"><button class="active" data-m="pct">% cùng độ</button><button data-m="kappa">Cohen κ</button></div></div>
-                <div class="matrix-note muted" id="sumMatrixNote">% ảnh chấm cùng độ · số nhỏ = số ảnh chung</div>
-                <div class="table-wrap" id="sumMatrix"></div>
-                <div class="kappa-legend">Diễn giải κ / α (Landis &amp; Koch): <span class="poor">&lt; 0,20 rất thấp</span> <span class="fair">0,21–0,40 thấp</span> <span class="mod">0,41–0,60 trung bình</span> <span class="good">0,61–0,80 khá cao</span> <span class="great">&gt; 0,80 gần như hoàn toàn</span>. Không tính độ 5 (Cân nhắc).</div>
-              </div>
-              <div class="panel">
-                <div class="panel-head"><h3>Ảnh bị chấm khác nhau</h3><span class="muted" id="sumDisCount"></span></div>
-                <div class="dis-list" id="sumDis"></div>
-              </div>
+            <div class="panel">
+              <div class="panel-head"><h3>Ảnh được phân loại khác nhau</h3><span class="muted" id="sumDisCount"></span></div>
+              <div class="dis-list" id="sumDis"></div>
             </div>
           </div>
         </section>
@@ -292,7 +283,7 @@
           <div class="panel">
             <div class="panel-head"><h3>Tài khoản</h3><span class="muted" id="adminUserCount"></span></div>
             <div class="table-wrap"><table class="users">
-              <thead><tr><th>Tên đăng nhập</th><th>Trạng thái</th><th>Ngày tạo</th><th>Đăng nhập gần nhất</th><th class="num">Lô</th><th class="num">Ảnh</th><th class="num">Đã chấm</th><th class="num">Dung lượng</th><th>Thao tác</th></tr></thead>
+              <thead><tr><th>Tên đăng nhập</th><th>Trạng thái</th><th>Ngày tạo</th><th>Đăng nhập gần nhất</th><th class="num">Lô</th><th class="num">Ảnh</th><th class="num">Đã phân loại</th><th class="num">Dung lượng</th><th>Thao tác</th></tr></thead>
               <tbody id="adminUsers"></tbody>
             </table></div>
           </div>
@@ -310,9 +301,8 @@
   </div>
 
   <script src="vendor/supabase.js?v=2.119.2" integrity="sha384-A97u3Qnt9GZHURO9YJZRe7VQgGUeFzcv6I1oIGnUTxQrCxnpQMwR0/G8F2zt9abZ"></script>
-  <script src="config.js?v=19"></script>
-  <script src="stats.js?v=1"></script>
-  <script src="seg.js?v=19"></script>
-  <script src="app.js?v=19"></script>
+  <script src="config.js?v=20"></script>
+  <script src="seg.js?v=20"></script>
+  <script src="app.js?v=20"></script>
 </body>
 </html>

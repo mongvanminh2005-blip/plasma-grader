@@ -319,11 +319,11 @@ function renderAll() {
   $('#batchShared').checked = !!b.shared;
   $('#deleteBatch').classList.toggle('hidden', !canManage);
   $('#batchName').readOnly = !canManage;
-  if (other) $('#batchMeta').textContent = `${total} ảnh · lô chung của ${b.owner || '?'} · ${b.raters || 0} người đã chấm`;
-  else $('#batchMeta').textContent += ` · ${b.shared ? 'lô chung' : 'lô riêng'} · ${b.raters || 0} người đã chấm`;
+  if (other) $('#batchMeta').textContent = `${total} ảnh · lô chung của ${b.owner || '?'} · ${b.raters || 0} người đã phân loại`;
+  else $('#batchMeta').textContent += ` · ${b.shared ? 'lô chung' : 'lô riêng'} · ${b.raters || 0} người đã phân loại`;
   const raws = state.images.filter(i => RAW_EXT.test(i.storage_path));
   $('#rawBanner').classList.toggle('hidden', !raws.length || rawBusy);
-  if (raws.length) $('#rawText').textContent = `${raws.length} ảnh đang lưu ở dạng RAW (trình duyệt không hiển thị được và tốn dung lượng). Chuyển sang JPEG để xem, chấm và giải phóng dung lượng — kết quả đã chấm được giữ nguyên.`;
+  if (raws.length) $('#rawText').textContent = `${raws.length} ảnh đang lưu ở dạng RAW (trình duyệt không hiển thị được và tốn dung lượng). Chuyển sang JPEG để xem, phân loại và giải phóng dung lượng — kết quả phân loại được giữ nguyên.`;
   $('#progressText').textContent = `${graded}/${total}`;
   $('#progressBar').style.width = (total ? graded / total * 100 : 0) + '%';
 
@@ -333,7 +333,7 @@ function renderAll() {
     <div class="d"><div class="top"><span>Độ ${g}</span><b>${counts[k]}</b></div>
     <div class="track"><i data-g="${g}" style="width:${counts[k] / max * 100}%"></i></div></div>`).join('');
 
-  const chips = [['all', 'Tất cả', total], ['none', 'Chưa chấm', total - graded], ...GRADES.map(({ g }, k) => [String(g), 'Độ ' + g, counts[k]])];
+  const chips = [['all', 'Tất cả', total], ['none', 'Chưa phân loại', total - graded], ...GRADES.map(({ g }, k) => [String(g), 'Độ ' + g, counts[k]])];
   $('#filters').innerHTML = chips.map(([k, l, c]) =>
     `<button class="chip ${state.filter === k ? 'active' : ''}" data-f="${k}">${l}<span class="c">${c}</span></button>`).join('');
   $('#filters').querySelectorAll('.chip').forEach(c => c.onclick = () => {
@@ -374,7 +374,7 @@ function showCurrent() {
   const pos = v.findIndex(i => i.id === img.id);
   $('#counter').textContent = pos >= 0 ? `${pos + 1} / ${v.length}` : `${state.images.indexOf(img) + 1} / ${state.images.length}`;
   if (document.activeElement !== $('#note')) $('#note').value = img.note || '';
-  setSave(img.graded_at ? 'ok' : '', img.graded_at ? 'Đã lưu lúc ' + timeStr(img.graded_at) : 'Chưa chấm');
+  setSave(img.graded_at ? 'ok' : '', img.graded_at ? 'Đã lưu lúc ' + timeStr(img.graded_at) : 'Chưa phân loại');
   renderGradeSelection();
   $('#delImg').classList.toggle('hidden', !canDelete(img));
   if (seg.shownId !== img.id) { seg.shownId = img.id; seg.sel = -1; seg.drawing = null; seg.pan = [0, 0]; if (seg.zoomFree) { seg.zoomFree = false; seg.zoomMode = localStorage.getItem('pg-zoom') || '3'; } updateDrawBtn(); }
@@ -441,7 +441,7 @@ async function setGrade(g) {
   if (ok && $('#autoNext').checked && g !== null) {
     const nextPos = nv.some(i => i.id === img.id) ? pos + 1 : pos;
     if (nv[nextPos]) select(nv[nextPos].id);
-    else { if (!state.images.some(i => i.grade === null)) toast('🎉 Đã chấm xong toàn bộ lô!'); showCurrent(); }
+    else { if (!state.images.some(i => i.grade === null)) toast('🎉 Đã phân loại xong toàn bộ lô!'); showCurrent(); }
   } else showCurrent();
   loadBatches();
 }
@@ -533,7 +533,7 @@ $('#batchName').addEventListener('keydown', e => e.key === 'Enter' && e.target.b
 $('#batchShared').onchange = async e => {
   try {
     check(await sb.from('batches').update({ shared: e.target.checked }).eq('id', state.batchId));
-    toast(e.target.checked ? 'Lô chung: mọi người có thể xem và chấm' : 'Lô riêng: chỉ bạn (và quản trị viên) thấy');
+    toast(e.target.checked ? 'Lô chung: mọi người có thể xem và phân loại' : 'Lô riêng: chỉ bạn (và quản trị viên) thấy');
     loadBatches().then(renderAll);
   } catch (ex) { e.target.checked = !e.target.checked; toast(ex.message); }
 };
@@ -571,7 +571,7 @@ const modeOf = arr => {
   return Object.keys(c).filter(k => c[k] === max).map(Number);
 };
 
-// xuất CSV: mỗi ảnh một dòng, mỗi người chấm một cột
+// xuất CSV: mỗi ảnh một dòng, mỗi người phân loại một cột
 async function exportCsv(batchId) {
   try {
     toast('Đang chuẩn bị file CSV…');
@@ -594,7 +594,7 @@ async function buildCsv(batchId) {
     const labelOf = g => GRADES.find(x => x.g === g)?.label || '';
     const e = v => { let t = String(v ?? ''); if (/^[=+\-@\t\r]/.test(t) && !/^-?\d+(\.\d+)?$/.test(t)) t = "'" + t; return `"${t.replace(/"/g, '""')}"`; };
     const head = ['Lô', 'Người tải', 'Đường dẫn', 'Tên file', ...raters.map(u => 'Độ – ' + nameOfUser(u)),
-      'Số người chấm', 'Độ phổ biến nhất', 'Mức', 'Đồng thuận', 'Chênh lệch (0–4)', 'Ghi chú',
+      'Số người phân loại', 'Độ phổ biến nhất', 'Mức', 'Đồng thuận', 'Chênh lệch (0–4)', 'Ghi chú',
       'Khoanh vùng', 'Plasma / (plasma + hồng cầu) theo chiều cao (%)'];
     const lines = [head.map(e).join(',')];
     images.forEach(im => {
@@ -698,7 +698,7 @@ async function refreshAdmin() {
       ${sub ? `<div class="k">${sub}</div>` : ''}${pct !== null ? `<div class="bar lg ${pct > 80 ? 'warn' : ''}"><i style="width:${pct}%"></i></div>` : ''}</div>`;
     $('#adminCards').innerHTML =
       card('Tài khoản', ov.users) + card('Lô ảnh', ov.batches) +
-      card('Ảnh đã tải', ov.images, `${ov.graded} đã chấm (${ov.images ? Math.round(ov.graded / ov.images * 100) : 0}%)`) +
+      card('Ảnh đã tải', ov.images, `${ov.graded} đã phân loại (${ov.images ? Math.round(ov.graded / ov.images * 100) : 0}%)`) +
       card('Dung lượng ảnh', fmtBytes(ov.storage_bytes), `${sPct.toFixed(1)}% của 1 GB miễn phí`, sPct) +
       card('Cơ sở dữ liệu', fmtBytes(ov.db_bytes), `${dPct.toFixed(1)}% của 500 MB miễn phí`, dPct) +
       card('Thùng rác', ov.trash ?? 0, 'lô + ảnh chờ xoá hẳn');
@@ -1374,7 +1374,7 @@ window.addEventListener('resize', debounce(applyZoom, 100));
 })();
 
 
-// ---------- TỔNG KẾT: mọi người chấm thế nào ----------
+// ---------- TỔNG KẾT: mọi người phân loại thế nào ----------
 const refreshSummarySoon = debounce(() => refreshSummary(true), 800);
 let sumData = null, sumShowAll = false;
 async function refreshSummary(quiet) {
@@ -1396,18 +1396,6 @@ $('#sumBatch').onchange = () => { sumShowAll = false; refreshSummary(); };
 $('#sumRefresh').onclick = () => refreshSummary();
 $('#sumExport').onclick = () => exportCsv($('#sumBatch').value ? Number($('#sumBatch').value) : null);
 
-let sumMetric = 'pct';
-const fmtK = v => v === null || v === undefined || Number.isNaN(v) ? '–' : v.toFixed(2);
-function statTile(k, v, sub, help) {
-  const L = Agree.label(v);
-  return `<div class="card stat" title="${help}"><div class="k">${k} <span class="qm">?</span></div><div class="v">${fmtK(v)}</div><div class="klabel ${L.cls}">${L.text}</div><div class="k">${sub}</div></div>`;
-}
-$('#sumMetric').querySelectorAll('button').forEach(b => b.onclick = () => {
-  sumMetric = b.dataset.m;
-  $('#sumMetric').querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
-  $('#sumMatrixNote').textContent = sumMetric === 'kappa' ? 'Cohen κ có trọng số bậc hai (thang 0–4) · số nhỏ = số ảnh chung' : '% ảnh chấm cùng độ · số nhỏ = số ảnh chung';
-  renderSummary();
-});
 function computeSummary(images, ratings, batchNames) {
   const byImg = new Map();
   ratings.forEach(r => { if (!byImg.has(r.image_id)) byImg.set(r.image_id, new Map()); byImg.get(r.image_id).set(r.user_id, r.grade); });
@@ -1435,27 +1423,7 @@ function computeSummary(images, ratings, batchNames) {
     if (!same) disagree.push({ im, entries, spread: num.length >= 2 ? Math.max(...num) - Math.min(...num) : 0, has5: gs.includes(5), batch: batchNames.get(im.batch_id) });
   });
   disagree.sort((a, b) => b.spread - a.spread || b.entries.length - a.entries.length);
-  // ---- chỉ số thống kê (chỉ thang 0–4, bỏ độ 5) ----
-  const K = 5, units = [], g04 = new Map();
-  images.forEach(im => {
-    const m = byImg.get(im.id); if (!m) return;
-    const mm = new Map([...m.entries()].filter(([, g]) => g <= 4));
-    g04.set(im.id, mm);
-    if (mm.size >= 2) units.push([...mm.values()]);
-  });
-  const pairK = new Map();
-  for (let x = 0; x < raters.length; x++) for (let y = x + 1; y < raters.length; y++) {
-    const a = [], b = [];
-    g04.forEach(mm => { if (mm.has(raters[x]) && mm.has(raters[y])) { a.push(mm.get(raters[x])); b.push(mm.get(raters[y])); } });
-    if (a.length >= 2) pairK.set(pk(raters[x], raters[y]), { n: a.length, k: Agree.cohen(a, b, K, false), kw: Agree.cohen(a, b, K, true) });
-  }
-  const complete = raters.length >= 2 ? [...g04.values()].filter(mm => raters.every(u => mm.has(u))).map(mm => raters.map(u => mm.get(u))) : [];
-  const stats = {
-    alphaOrd: units.length ? Agree.kripp(units, K, 'ordinal') : null,
-    alphaNom: units.length ? Agree.kripp(units, K, 'nominal') : null, units: units.length,
-    fleiss: complete.length >= 2 ? Agree.fleiss(complete, K) : null, complete: complete.length,
-  };
-  return { stats, pairK, images, ratings, raters, per, pair, pk, multi, full, within1, within1N, review, disagree,
+  return { images, ratings, raters, per, pair, pk, multi, full, within1, within1N, review, disagree,
     gradedImgs: byImg.size, total: images.length };
 }
 
@@ -1464,49 +1432,22 @@ function renderSummary() {
   const d = sumData; if (!d) return;
   const tile = (k, v, sub = '') => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div>${sub ? `<div class="k">${sub}</div>` : ''}</div>`;
   $('#sumCards').innerHTML =
-    tile('Ảnh đã có người chấm', `${d.gradedImgs}<small>/${d.total}</small>`) +
-    tile('Người chấm', d.raters.length) +
-    tile('Lượt chấm', d.ratings.length) +
-    tile('Ảnh có ≥ 2 người chấm', d.multi) +
-    tile('Đồng thuận hoàn toàn', pct(d.full, d.multi), d.multi ? `${d.full}/${d.multi} ảnh mọi người cùng độ` : 'cần ≥ 2 người chấm cùng ảnh') +
-    tile('Lệch tối đa 1 độ', pct(d.within1, d.within1N), d.within1N ? `${d.within1}/${d.within1N} ảnh (không tính độ 5)` : '') +
-    tile('Ảnh có người chọn “Cân nhắc”', d.review) +
-    statTile('Krippendorff α (thứ bậc)', d.stats.alphaOrd, `${d.stats.units} ảnh có ≥ 2 người chấm`, 'Chỉ số chính cho thang có thứ tự 0–4: tính cả mức độ lệch (lệch 1 độ nhẹ hơn lệch 3 độ), chấp nhận mỗi ảnh số người chấm khác nhau') +
-    statTile('Fleiss κ', d.stats.fleiss, d.stats.complete ? `${d.stats.complete} ảnh tất cả ${d.raters.length} người cùng chấm` : 'cần ảnh mà mọi người đều chấm', 'Đồng thuận tuyệt đối (đúng cùng độ) trên các ảnh được tất cả người chấm cùng chấm') +
-    statTile('Krippendorff α (định danh)', d.stats.alphaNom, 'chỉ tính trùng / không trùng', 'Giống Fleiss κ nhưng chấp nhận thiếu dữ liệu: coi mọi khác biệt như nhau');
+    tile('Ảnh đã phân loại', `${d.gradedImgs}<small>/${d.total}</small>`) +
+    tile('Người phân loại', d.raters.length) +
+    tile('Mức đồng thuận', pct(d.full, d.multi), d.multi ? `${d.full}/${d.multi} ảnh mọi người chọn cùng độ` : 'cần ≥ 2 người cùng phân loại một ảnh') +
+    tile('Ảnh có người chọn “Cân nhắc”', d.review);
 
-  // theo từng người chấm
-  const legend = GRADES.map(g => `<span class="lg"><i class="cg${g.g}"></i>${g.g} ${g.label}</span>`).join('');
-  $('#sumRaterLegend').innerHTML = legend;
+  // theo từng người phân loại
+  $('#sumRaterLegend').innerHTML = GRADES.map(g => `<span class="lg"><i class="cg${g.g}"></i>${g.g} ${g.label}</span>`).join('');
   $('#sumRaters').innerHTML = d.raters.length ? [...d.per.values()].sort((a, b) => b.n - a.n).map(p => {
     const bar = p.dist.map((c, g) => c ? `<i class="cg${g}" style="flex:${c}" title="${esc(nameOfUser(p.u))} · Độ ${g} (${GRADES[g].label}): ${c} ảnh (${pct(c, p.n)})"></i>` : '').join('');
     const counts = p.dist.map((c, g) => c ? `<span><i class="cg${g}"></i>${g}: <b>${c}</b></span>` : '').join('');
     return `<tr><td class="uname">${esc(nameOfUser(p.u))}${p.u === state.user.id ? ' <span class="you">(bạn)</span>' : ''}</td>
       <td class="num">${p.n}</td>
-      <td class="distcell"><div class="stack">${bar}</div><div class="dnum">${counts}</div></td>
-      <td class="num">${p.cnt04 ? (p.sum / p.cnt04).toFixed(2) : '–'}</td>
-      <td class="num">${p.agreeN ? pct(p.agree, p.agreeN) : '–'}<small>${p.agreeN ? ` (${p.agreeN})` : ''}</small></td></tr>`;
-  }).join('') : '<tr><td colspan="5" class="muted empty-row">Chưa có ai chấm trong phạm vi này</td></tr>';
+      <td class="distcell"><div class="stack">${bar}</div><div class="dnum">${counts}</div></td></tr>`;
+  }).join('') : '<tr><td colspan="3" class="muted empty-row">Chưa có ai phân loại trong phạm vi này</td></tr>';
 
-  // ma trận đồng thuận từng cặp
-  const R = d.raters;
-  if (R.length < 2) $('#sumMatrix').innerHTML = '<p class="muted empty-row">Cần ít nhất 2 người cùng chấm để so sánh.</p>';
-  else $('#sumMatrix').innerHTML = `<table class="matrix"><thead><tr><th></th>${R.map(u => `<th>${esc(nameOfUser(u))}</th>`).join('')}</tr></thead><tbody>${
-    R.map(a => `<tr><th>${esc(nameOfUser(a))}</th>${R.map(b => {
-      if (a === b) return '<td class="self">—</td>';
-      const v = d.pair.get(d.pk(a, b)), kk = d.pairK.get(d.pk(a, b));
-      if (!v) return '<td class="na" title="Chưa chấm chung ảnh nào">·</td>';
-      const r = v.same / v.n;
-      const tip = `${esc(nameOfUser(a))} & ${esc(nameOfUser(b))}: cùng độ ${v.same}/${v.n} ảnh chung` + (kk ? ` · Cohen κ = ${fmtK(kk.k)} · κ có trọng số = ${fmtK(kk.kw)} (${kk.n} ảnh, không tính độ 5)` : '');
-      if (sumMetric === 'kappa') {
-        if (!kk || kk.kw === null) return `<td class="na" title="${tip}">·</td>`;
-        const q = Math.max(0, kk.kw);
-        return `<td style="--a:${(0.08 + q * 0.72).toFixed(2)}" class="${q >= 0.6 ? 'hi' : ''}" title="${tip}">${fmtK(kk.kw)}<small>${kk.n}</small></td>`;
-      }
-      return `<td style="--a:${(0.08 + r * 0.72).toFixed(2)}" class="${r >= 0.6 ? 'hi' : ''}" title="${tip}">${Math.round(r * 100)}%<small>${v.n}</small></td>`;
-    }).join('')}</tr>`).join('')}</tbody></table>`;
-
-  // ảnh chấm lệch nhau
+  // ảnh được phân loại khác nhau
   const list = sumShowAll ? d.disagree : d.disagree.slice(0, 30);
   $('#sumDisCount').textContent = d.disagree.length ? `${d.disagree.length} ảnh` : '';
   $('#sumDis').innerHTML = d.disagree.length ? list.map(x => `
@@ -1517,10 +1458,9 @@ function renderSummary() {
       <div class="dspread"><b>${x.spread}</b><span>độ lệch</span></div>
       <button class="btn outline sm">Mở ảnh</button>
     </div>`).join('') + (d.disagree.length > list.length ? `<button class="btn outline sm more" id="sumMore">Xem thêm ${d.disagree.length - list.length} ảnh</button>` : '')
-    : '<p class="muted empty-row">Không có ảnh nào bị chấm khác nhau 🎉</p>';
+    : '<p class="muted empty-row">Không có ảnh nào được phân loại khác nhau 🎉</p>';
   $('#sumMore')?.addEventListener('click', () => { sumShowAll = true; renderSummary(); });
   $('#sumDis').querySelectorAll('.dis').forEach(el => el.onclick = () => openImageFromSummary(Number(el.dataset.b), Number(el.dataset.i)));
-  // ảnh nhỏ
   const imgs = [...$('#sumDis').querySelectorAll('img[data-path]')];
   signUrls(imgs.map(i => ({ storage_path: i.dataset.path }))).then(() => imgs.forEach(i => { i.src = state.urls.get(i.dataset.path)?.url || ''; })).catch(() => {});
 }
@@ -1749,7 +1689,7 @@ async function runBackup(withImages) {
       { name: 'ket-qua.csv', data: enc.encode((await buildCsv(null)).text) },
       { name: 'DOC-TOI.txt', data: enc.encode(`Sao lưu Plasma Grader lúc ${new Date().toLocaleString('vi-VN')}\r\n` +
         `- data.json: toàn bộ tài khoản (không có mật khẩu), lô, ảnh (kể cả vùng khoanh, thùng rác), điểm của từng người.\r\n` +
-        `- ket-qua.csv: bảng kết quả mở bằng Excel (mỗi người chấm một cột).\r\n` +
+        `- ket-qua.csv: bảng kết quả mở bằng Excel (mỗi người phân loại một cột).\r\n` +
         (withImages ? `- images/: ảnh đã lưu trên hệ thống, xếp theo lô (đường dẫn gốc giữ nguyên).\r\n` : '- (bản này không kèm ảnh)\r\n')) },
     ];
     if (withImages) {
