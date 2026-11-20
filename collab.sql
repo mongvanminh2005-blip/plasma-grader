@@ -148,3 +148,28 @@ do $$ begin
   begin alter publication supabase_realtime add table public.ratings;
   exception when duplicate_object then null; end;
 end $$;
+
+-- Gộp nhiều lô vào lô đích (chạy với quyền của người gọi: RLS vẫn áp dụng)
+create or replace function public.merge_batches(target bigint, sources bigint[], new_name text default null)
+returns int language plpgsql security invoker set search_path = '' as $$
+declare moved int; bad int;
+begin
+  sources := array(select distinct s from unnest(sources) s where s <> target);
+  if coalesce(array_length(sources, 1), 0) = 0 then raise exception 'Chọn ít nhất 2 lô để gộp'; end if;
+  select count(*) into bad from public.batches b
+    where b.id = any(sources || target) and b.user_id <> (select auth.uid()) and not public.is_admin();
+  if bad > 0 then raise exception 'Chỉ gộp được các lô của bạn (hoặc quản trị viên gộp mọi lô)'; end if;
+  if (select count(*) from public.batches b where b.id = any(sources || target)) <> array_length(sources, 1) + 1 then
+    raise exception 'Không tìm thấy một số lô';
+  end if;
+  update public.images set batch_id = target where batch_id = any(sources);
+  get diagnostics moved = row_count;
+  update public.batches set
+    name = coalesce(nullif(trim(new_name), ''), name),
+    shared = shared or exists (select 1 from public.batches s where s.id = any(sources) and s.shared)
+  where id = target;
+  delete from public.batches where id = any(sources);
+  return moved;
+end $$;
+revoke all on function public.merge_batches(bigint, bigint[], text) from public, anon;
+grant execute on function public.merge_batches(bigint, bigint[], text) to authenticated;

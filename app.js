@@ -38,7 +38,7 @@ const USER_DOMAIN = 'users.plasma-grader.app';
 const toEmail = u => (u.includes('@') ? u : `${u}@${USER_DOMAIN}`).toLowerCase();
 const displayName = email => (email || '').endsWith('@' + USER_DOMAIN) ? email.split('@')[0] : (email || '');
 
-const state = { profiles: [], view: 'grade', mode: 'login', user: null, batches: [], batchId: null, images: [], currentId: null, filter: 'all', channel: null, urls: new Map(),
+const state = { merge: null, profiles: [], view: 'grade', mode: 'login', user: null, batches: [], batchId: null, images: [], currentId: null, filter: 'all', channel: null, urls: new Map(),
   isAdmin: false, scope: 'me', users: [], adminOpen: false };
 
 // ---------- helpers ----------
@@ -199,13 +199,15 @@ function renderBatches() {
   if (!state.batches.length) ul.innerHTML = '<li class="muted" style="cursor:default">Chưa có lô nào</li>';
   else ul.innerHTML = state.batches.map(b => {
     const pct = b.total ? Math.round(b.graded / b.total * 100) : 0;
-    return `<li data-id="${b.id}" class="${b.id === state.batchId ? 'active' : ''}">
+    const canMerge = b.user_id === state.user?.id || state.isAdmin;
+    const pick = state.merge ? (canMerge ? `<input type="checkbox" class="mpick" ${state.merge.has(b.id) ? 'checked' : ''} />` : '<span class="mpick-x" title="Không phải lô của bạn">—</span>') : '';
+    return `<li data-id="${b.id}" class="${b.id === state.batchId && !state.merge ? 'active' : ''} ${state.merge ? 'picking' : ''} ${state.merge?.has(b.id) ? 'picked' : ''} ${state.merge && !canMerge ? 'nopick' : ''}">${pick}<div class="bbody">
       <div class="bn" title="${esc(b.name)}">${b.user_id !== state.user?.id ? `<span class="owner-tag">${esc(b.owner || '?')}</span>` : (b.shared ? '' : '<span class="owner-tag lock" title="Lô riêng">🔒</span>')}${esc(b.name)}</div>
       <div class="bm"><span>Tôi: ${b.graded}/${b.total} · 👥 ${b.raters || 0} · ${dateStr(b.created_at)}</span>
         ${pct === 100 && b.total ? '<span class="done">Xong</span>' : `<span>${pct}%</span>`}</div>
-      <div class="bar"><i style="width:${pct}%"></i></div></li>`;
+      <div class="bar"><i style="width:${pct}%"></i></div></div></li>`;
   }).join('');
-  ul.querySelectorAll('li[data-id]').forEach(li => li.onclick = () => openBatch(Number(li.dataset.id)));
+  ul.querySelectorAll('li[data-id]').forEach(li => li.onclick = () => state.merge ? toggleMergePick(Number(li.dataset.id)) : openBatch(Number(li.dataset.id)));
   $('#emptyState').classList.toggle('hidden', !!state.batchId || state.view !== 'grade');
 }
 
@@ -1383,6 +1385,50 @@ async function openImageFromSummary(batchId, imageId) {
   await openBatch(batchId);
   state.filter = 'all'; renderAll(); select(imageId);
 }
+
+
+// ---------- GỘP LÔ ----------
+function updateMergeBox() {
+  const n = state.merge?.size || 0;
+  $('#mergeCount').textContent = n < 2 ? `Đã chọn ${n} – tick chọn ít nhất 2 lô` : `Đã chọn ${n} lô · ${state.batches.filter(b => state.merge.has(b.id)).reduce((s, b) => s + b.total, 0)} ảnh`;
+  $('#mergeGo').disabled = n < 2;
+}
+function toggleMergePick(id) {
+  const b = state.batches.find(x => x.id === id);
+  if (!b || !(b.user_id === state.user.id || state.isAdmin)) return toast('Chỉ gộp được lô của bạn');
+  state.merge.has(id) ? state.merge.delete(id) : state.merge.add(id);
+  if (!state.mergeNameEdited || !$('#mergeName').value.trim()) {
+    const first = state.batches.filter(x => state.merge.has(x.id)).sort((a, c) => a.id - c.id)[0];
+    if (first) $('#mergeName').value = first.name;
+  }
+  renderBatches(); updateMergeBox();
+}
+function setMerge(on) {
+  state.merge = on ? new Set() : null;
+  $('#mergeBox').classList.toggle('hidden', !on);
+  $('#mergeBtn').textContent = on ? 'Đang gộp…' : 'Gộp lô';
+  $('#mergeName').value = ''; state.mergeNameEdited = false;
+  renderBatches(); if (on) updateMergeBox();
+}
+$('#mergeName').addEventListener('input', () => { state.mergeNameEdited = true; });
+$('#mergeBtn').onclick = () => setMerge(!state.merge);
+$('#mergeCancel').onclick = () => setMerge(false);
+$('#mergeGo').onclick = async () => {
+  const ids = [...state.merge].sort((a, b) => a - b);
+  if (ids.length < 2) return;
+  const target = ids[0], name = $('#mergeName').value.trim();
+  const picked = state.batches.filter(b => state.merge.has(b.id));
+  const total = picked.reduce((s, b) => s + b.total, 0);
+  if (!confirm(`Gộp ${ids.length} lô (${total} ảnh) thành một lô "${name || picked.find(b => b.id === target)?.name}"?\n\n${picked.map(b => '• ' + b.name + ' (' + b.total + ' ảnh)').join('\n')}`)) return;
+  $('#mergeGo').disabled = true;
+  try {
+    const moved = check(await sb.rpc('merge_batches', { target, sources: ids.slice(1), new_name: name || null }));
+    toast(`Đã gộp ${ids.length} lô · chuyển ${moved} ảnh`);
+    setMerge(false);
+    await loadBatches();
+    await openBatch(target);
+  } catch (e) { toast(e.message); $('#mergeGo').disabled = false; }
+};
 
 // ---------- boot ----------
 if (sb) {
