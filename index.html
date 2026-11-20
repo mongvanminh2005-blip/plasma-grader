@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Plasma Grader — Phân độ huyết tương</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath d=%27M16 2C16 2 6 14 6 20a10 10 0 0 0 20 0C26 14 16 2 16 2z%27 fill=%27%23e9a93a%27/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- ========== AUTH ========== -->
+  <section id="auth" class="auth hidden">
+    <div class="auth-art">
+      <div class="brand big"><span class="drop"></span>Plasma Grader</div>
+      <h1>Phân độ đậm đặc huyết tương<br />nhanh, gọn, lưu tức thì.</h1>
+      <p>Tải một ảnh hoặc cả thư mục, chọn độ từ 0 đến 5 — kết quả được lưu ngay lập tức và đồng bộ trên mọi thiết bị bạn đăng nhập.</p>
+      <div class="scale-demo">
+        <span data-g="0">0</span><span data-g="1">1</span><span data-g="2">2</span>
+        <span data-g="3">3</span><span data-g="4">4</span><span data-g="5">5</span>
+      </div>
+    </div>
+    <div class="auth-card">
+      <div class="tabs">
+        <button class="tab active" data-mode="login">Đăng nhập</button>
+        <button class="tab" data-mode="register">Tạo tài khoản</button>
+      </div>
+      <form id="authForm" autocomplete="on">
+        <label>Email
+          <input name="email" type="email" required autocomplete="email" placeholder="vd: ten@gmail.com" />
+        </label>
+        <label>Mật khẩu
+          <input name="password" type="password" required minlength="6" autocomplete="current-password" placeholder="Tối thiểu 6 ký tự" />
+        </label>
+        <label class="confirm hidden">Nhập lại mật khẩu
+          <input name="confirm" type="password" minlength="6" autocomplete="new-password" />
+        </label>
+        <p id="authError" class="error"></p>
+        <button class="btn primary block" type="submit" id="authSubmit">Đăng nhập</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- ========== APP ========== -->
+  <section id="app" class="app hidden">
+    <header class="topbar">
+      <div class="brand"><span class="drop"></span>Plasma Grader</div>
+      <div class="live" id="liveStatus" title="Trạng thái đồng bộ"><i></i><span>Đang kết nối…</span></div>
+      <div class="user">
+        <span class="avatar" id="avatar"></span>
+        <span id="username"></span>
+        <button class="btn ghost sm" id="logoutBtn">Đăng xuất</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="upload-box" id="dropZone">
+          <div class="upload-icon">⬆</div>
+          <p><b>Kéo thả ảnh hoặc thư mục</b><br />vào đây</p>
+          <div class="upload-actions">
+            <button class="btn primary sm" id="pickFiles">Chọn ảnh</button>
+            <button class="btn outline sm" id="pickFolder">Chọn thư mục</button>
+          </div>
+          <input type="file" id="fileInput" accept="image/*" multiple hidden />
+          <input type="file" id="folderInput" webkitdirectory directory multiple hidden />
+          <label class="switch small" title="Thu nhỏ ảnh về tối đa 1600px trước khi tải để tiết kiệm dung lượng miễn phí (1 GB)"><input type="checkbox" id="compress" checked /><span></span> Nén ảnh khi tải lên</label>
+        </div>
+        <div class="upload-progress hidden" id="uploadProgress">
+          <div class="row"><span id="uploadLabel">Đang tải…</span><span id="uploadPct">0%</span></div>
+          <div class="bar"><i id="uploadBar"></i></div>
+        </div>
+
+        <div class="side-head">
+          <h3>Lô ảnh</h3>
+          <button class="link" id="exportAll">Xuất tất cả CSV</button>
+        </div>
+        <ul class="batch-list" id="batchList"></ul>
+      </aside>
+
+      <main class="main" id="main">
+        <div class="empty" id="emptyState">
+          <div class="empty-illu"><span></span><span></span><span></span></div>
+          <h2>Chưa có lô ảnh nào</h2>
+          <p>Tải lên một ảnh hoặc cả thư mục để bắt đầu phân độ.</p>
+        </div>
+
+        <div class="workspace hidden" id="workspace">
+          <div class="ws-head">
+            <div class="ws-title">
+              <input id="batchName" class="title-input" title="Bấm để đổi tên" />
+              <span class="muted" id="batchMeta"></span>
+            </div>
+            <div class="ws-actions">
+              <button class="btn outline sm" id="addToBatch">+ Thêm ảnh vào lô</button>
+              <button class="btn outline sm" id="exportBatch">Xuất CSV</button>
+              <button class="btn danger-ghost sm" id="deleteBatch">Xoá lô</button>
+            </div>
+          </div>
+
+          <div class="stats">
+            <div class="progress-card">
+              <div class="row"><span>Tiến độ</span><b id="progressText">0/0</b></div>
+              <div class="bar lg"><i id="progressBar"></i></div>
+            </div>
+            <div class="dist" id="distribution"></div>
+          </div>
+
+          <div class="ws-body">
+            <div class="viewer">
+              <div class="stage" id="stage">
+                <img id="mainImg" alt="" />
+                <button class="nav prev" id="prevBtn" title="Ảnh trước (←)">‹</button>
+                <button class="nav next" id="nextBtn" title="Ảnh sau (→)">›</button>
+                <span class="counter" id="counter"></span>
+                <span class="zoom-hint">Bấm vào ảnh để phóng to</span>
+              </div>
+              <div class="img-info">
+                <div class="fname" id="fname"></div>
+                <div class="save-state" id="saveState"></div>
+              </div>
+
+              <div class="grade-panel">
+                <div class="gp-label">Chọn độ đậm đặc <span class="muted">— phím tắt 0–5</span></div>
+                <div class="grades" id="grades"></div>
+                <div class="gp-foot">
+                  <label class="switch"><input type="checkbox" id="autoNext" checked /><span></span> Tự chuyển ảnh tiếp theo</label>
+                  <button class="link" id="clearGrade">Bỏ chọn độ</button>
+                </div>
+                <textarea id="note" rows="2" placeholder="Ghi chú (tự lưu)…"></textarea>
+              </div>
+            </div>
+
+            <div class="thumbs-panel">
+              <div class="filters" id="filters"></div>
+              <div class="thumbs" id="thumbs"></div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </section>
+
+  <div class="lightbox hidden" id="lightbox"><img id="lightImg" alt="" /></div>
+  <div class="toast" id="toast"></div>
+
+  <div class="setup-note hidden" id="setupNote">
+    <h2>Chưa cấu hình Supabase</h2>
+    <p>Mở file <code>config.js</code> và dán <b>Project URL</b> cùng <b>anon key</b> từ Supabase, sau đó tải lại trang.</p>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
