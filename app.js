@@ -161,6 +161,7 @@ async function startApp(user) {
   await loadProfiles().catch(e => { console.error(e); state.profiles = []; renderScope(); });
   if (state.isAdmin) await loadUsers().then(() => { const n = state.users.filter(u => !u.approved).length; $('#pendBadge').textContent = n; $('#pendBadge').classList.toggle('hidden', !n); }).catch(e => console.error(e));
   applySegOn();
+  purgeTrash().catch(e => console.error('purge', e)).finally(updateTrashCount);
   connectLive();
   await loadBatches();
   const saved = Number(localStorage.getItem('batchId'));
@@ -177,6 +178,11 @@ function connectLive() {
   state.channel = sb.channel('pg-' + uid)
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'images' }, p => {
       const d = p.new, img = state.images.find(i => i.id === d.id);
+      if (img && d.deleted_at) {
+        state.images = state.images.filter(i => i.id !== d.id);
+        if (state.currentId === d.id) state.currentId = view()[0]?.id ?? null;
+        renderAll(); showCurrent(); return;
+      }
       const editingThis = seg.editing && d.id === state.currentId;
       if (img && !editingThis && JSON.stringify(img.regions ?? null) !== JSON.stringify(d.regions ?? null)) {
         Object.assign(img, { regions: d.regions, regions_source: d.regions_source, regions_at: d.regions_at });
@@ -247,7 +253,7 @@ function renderBatches() {
 async function fetchImages(batchId) {
   const imgs = await fetchAll(() => sb.from('images')
     .select('id, batch_id, user_id, filename, rel_path, storage_path, regions, regions_source, regions_at')
-    .eq('batch_id', batchId).order('rel_path').order('id'));
+    .eq('batch_id', batchId).is('deleted_at', null).order('rel_path').order('id'));
   // điểm của chính mình (mỗi người có điểm riêng)
   const mine = await fetchAll(() => sb.from('ratings')
     .select('image_id, grade, note, graded_at, images!inner(batch_id)')
@@ -270,7 +276,7 @@ const urlOf = img => state.urls.get(img.storage_path)?.url || '';
 async function openBatch(id) {
   closeAdmin();
   if (state.pick) setPick(false);
-  if (state.view !== 'grade') { state.view = 'grade'; document.querySelectorAll('.nav-tab').forEach(b => b.classList.toggle('active', b.dataset.view === 'grade')); $('#summaryPanel').classList.add('hidden'); }
+  if (state.view !== 'grade') { state.view = 'grade'; document.querySelectorAll('.nav-tab').forEach(b => b.classList.toggle('active', b.dataset.view === 'grade')); $('#summaryPanel').classList.add('hidden'); $('#trashPanel').classList.add('hidden'); $('#trashBtn').classList.remove('active'); }
   state.batchId = id; state.filter = 'all';
   localStorage.setItem('batchId', id);
   renderBatches();
@@ -457,22 +463,21 @@ async function deleteImages(ids) {
   const imgs = ids.map(id => state.images.find(i => i.id === id)).filter(canDelete);
   if (!imgs.length) return toast('Chỉ xoá được ảnh do bạn tải lên');
   const msg = imgs.length === 1
-    ? `Xoá ảnh "${imgs[0].rel_path}" khỏi lô?\nĐiểm của mọi người và vùng khoanh của ảnh này cũng bị xoá. Không thể hoàn tác.`
-    : `Xoá ${imgs.length} ảnh đã chọn?\nĐiểm của mọi người và vùng khoanh của các ảnh này cũng bị xoá. Không thể hoàn tác.`;
+    ? `Chuyển ảnh "${imgs[0].rel_path}" vào thùng rác?\nCó thể khôi phục trong ${TRASH_DAYS} ngày (kèm điểm và vùng khoanh).`
+    : `Chuyển ${imgs.length} ảnh đã chọn vào thùng rác?\nCó thể khôi phục trong ${TRASH_DAYS} ngày (kèm điểm và vùng khoanh).`;
   if (!confirm(msg)) return;
   const pos = view().findIndex(i => i.id === state.currentId);
   try {
-    for (let k = 0; k < imgs.length; k += 100) {
-      const part = imgs.slice(k, k + 100);
-      check(await sb.from('images').delete().in('id', part.map(i => i.id)));
-      await sb.storage.from(BUCKET).remove(part.map(i => i.storage_path));
-    }
+    const now = new Date().toISOString();
+    for (let k = 0; k < imgs.length; k += 100)
+      check(await sb.from('images').update({ deleted_at: now }).in('id', imgs.slice(k, k + 100).map(i => i.id)));
   } catch (e) { return toast(e.message); }
   const gone = new Set(imgs.map(i => i.id));
   state.images = state.images.filter(i => !gone.has(i.id));
   if (gone.has(state.currentId)) { const v = view(); state.currentId = (v[Math.min(Math.max(pos, 0), v.length - 1)] || v[0])?.id ?? null; }
   if (state.pick) { gone.forEach(id => state.pick.delete(id)); updatePickBar(); }
-  toast(imgs.length === 1 ? 'Đã xoá ảnh' : `Đã xoá ${imgs.length} ảnh`);
+  toast(imgs.length === 1 ? 'Đã chuyển ảnh vào thùng rác' : `Đã chuyển ${imgs.length} ảnh vào thùng rác`);
+  updateTrashCount();
   renderAll(); showCurrent(); loadBatches();
 }
 $('#delImg').onclick = () => current() && deleteImages([state.currentId]);
@@ -534,12 +539,10 @@ $('#batchShared').onchange = async e => {
 };
 $('#deleteBatch').onclick = async () => {
   const b = batch();
-  if (!confirm(`Xoá lô "${b.name}" cùng toàn bộ ${b.total} ảnh và kết quả? Không thể hoàn tác.`)) return;
-  try {
-    const paths = state.images.map(i => i.storage_path);
-    for (let k = 0; k < paths.length; k += 100) await sb.storage.from(BUCKET).remove(paths.slice(k, k + 100));
-    check(await sb.from('batches').delete().eq('id', b.id));
-  } catch (e) { return toast(e.message); }
+  if (!confirm(`Chuyển lô "${b.name}" (${b.total} ảnh) vào thùng rác?\nCó thể khôi phục nguyên vẹn trong ${TRASH_DAYS} ngày.`)) return;
+  try { check(await sb.from('batches').update({ deleted_at: new Date().toISOString() }).eq('id', b.id)); }
+  catch (e) { return toast(e.message); }
+  toast(`Đã chuyển lô "${b.name}" vào thùng rác`); updateTrashCount();
   closeBatch(); await loadBatches();
   if (state.batches[0]) openBatch(state.batches[0].id);
 };
@@ -548,14 +551,17 @@ $('#deleteBatch').onclick = async () => {
 // ---------- dữ liệu điểm của mọi người ----------
 // batchId: một lô; null: mọi lô đang xem được
 async function loadRatingData(batchId) {
-  const images = await fetchAll(() => {
-    const q = sb.from('images').select('id, batch_id, user_id, filename, rel_path, storage_path, regions, regions_source').order('batch_id').order('rel_path').order('id');
+  // chỉ lấy lô / ảnh chưa nằm trong thùng rác
+  const active = new Set((await fetchAll(() => sb.from('batch_stats').select('id').order('id'))).map(b => b.id));
+  const images = (await fetchAll(() => {
+    const q = sb.from('images').select('id, batch_id, user_id, filename, rel_path, storage_path, regions, regions_source').is('deleted_at', null).order('batch_id').order('rel_path').order('id');
     return batchId ? q.eq('batch_id', batchId) : q;
-  });
-  const ratings = await fetchAll(() => {
+  })).filter(i => active.has(i.batch_id));
+  const ids = new Set(images.map(i => i.id));
+  const ratings = (await fetchAll(() => {
     const q = sb.from('ratings').select('image_id, user_id, grade, note, graded_at, images!inner(batch_id)').not('grade', 'is', null).order('image_id').order('user_id');
     return batchId ? q.eq('images.batch_id', batchId) : q;
-  });
+  })).filter(r => ids.has(r.image_id));
   if (!state.profiles.length) await loadProfiles().catch(() => {});
   return { images, ratings };
 }
@@ -569,6 +575,18 @@ const modeOf = arr => {
 async function exportCsv(batchId) {
   try {
     toast('Đang chuẩn bị file CSV…');
+    const { text, name } = await buildCsv(batchId);
+    downloadBlob(new Blob([text], { type: 'text/csv;charset=utf-8' }), name);
+  } catch (ex) { toast(ex.message); }
+}
+function downloadBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+async function buildCsv(batchId) {
+  {
     const { images, ratings } = await loadRatingData(batchId);
     const batchName = new Map((await fetchAll(() => sb.from('batch_stats').select('id, name').order('id'))).map(b => [b.id, b.name]));
     const raters = [...new Set(ratings.map(r => r.user_id))].sort((a, b) => nameOfUser(a).localeCompare(nameOfUser(b)));
@@ -592,12 +610,9 @@ async function exportCsv(batchId) {
         num.length >= 2 ? Math.max(...num) - Math.min(...num) : '', notes,
         im.regions ? (im.regions_source === 'manual' ? 'Chỉnh tay' : 'AI') : '', plasmaRatio(im.regions)].map(e).join(','));
     });
-    const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = batchId ? `ket-qua-${(batchName.get(batchId) || 'lo').replace(/[\\/:*?"<>|]/g, '_')}.csv` : 'ket-qua-tat-ca.csv';
-    a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-  } catch (ex) { toast(ex.message); }
+    return { text: '﻿' + lines.join('\r\n'),
+      name: batchId ? `ket-qua-${(batchName.get(batchId) || 'lo').replace(/[\\/:*?"<>|]/g, '_')}.csv` : 'ket-qua-tat-ca.csv' };
+  }
 }
 $('#exportAll').onclick = () => exportCsv(null);
 $('#exportBatch').onclick = () => exportCsv(state.batchId);
@@ -640,6 +655,8 @@ function setView(v) {
   state.view = v;
   document.querySelectorAll('.nav-tab').forEach(b => b.classList.toggle('active', b.dataset.view === v));
   $('#summaryPanel').classList.toggle('hidden', v !== 'summary');
+  $('#trashPanel').classList.toggle('hidden', v !== 'trash');
+  $('#trashBtn').classList.toggle('active', v === 'trash');
   if (v !== 'admin') closeAdmin();
   if (v === 'grade') {
     $('#workspace').classList.toggle('hidden', !state.batchId);
@@ -649,6 +666,7 @@ function setView(v) {
     $('#workspace').classList.add('hidden'); $('#emptyState').classList.add('hidden');
   }
   if (v === 'summary') refreshSummary();
+  if (v === 'trash') refreshTrash();
 }
 document.querySelectorAll('.nav-tab').forEach(b => b.onclick = () => setView(b.dataset.view));
 function closeAdmin() {
@@ -658,7 +676,7 @@ function closeAdmin() {
 async function openAdmin() {
   state.view = 'admin';
   document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
-  $('#summaryPanel').classList.add('hidden');
+  $('#summaryPanel').classList.add('hidden'); $('#trashPanel').classList.add('hidden');
   state.adminOpen = true;
   $('#adminBtn').classList.add('active');
   $('#workspace').classList.add('hidden'); $('#emptyState').classList.add('hidden');
@@ -672,6 +690,7 @@ $('#adminExport').onclick = () => exportCsv(null);
 $('#adminDashboard').href = 'https://supabase.com/dashboard/project/' + (cfg.SUPABASE_URL || '').replace(/^https:\/\/|\.supabase\.co.*$/g, '');
 
 async function refreshAdmin() {
+  renderBackupNote();
   try {
     const [ov] = await Promise.all([sb.rpc('admin_overview').then(check), loadUsers()]);
     const sPct = Math.min(100, ov.storage_bytes / FREE_STORAGE * 100), dPct = Math.min(100, ov.db_bytes / FREE_DB * 100);
@@ -681,7 +700,8 @@ async function refreshAdmin() {
       card('Tài khoản', ov.users) + card('Lô ảnh', ov.batches) +
       card('Ảnh đã tải', ov.images, `${ov.graded} đã chấm (${ov.images ? Math.round(ov.graded / ov.images * 100) : 0}%)`) +
       card('Dung lượng ảnh', fmtBytes(ov.storage_bytes), `${sPct.toFixed(1)}% của 1 GB miễn phí`, sPct) +
-      card('Cơ sở dữ liệu', fmtBytes(ov.db_bytes), `${dPct.toFixed(1)}% của 500 MB miễn phí`, dPct);
+      card('Cơ sở dữ liệu', fmtBytes(ov.db_bytes), `${dPct.toFixed(1)}% của 500 MB miễn phí`, dPct) +
+      card('Thùng rác', ov.trash ?? 0, 'lô + ảnh chờ xoá hẳn');
     renderUsers();
   } catch (e) { toast(e.message); }
 }
@@ -1376,6 +1396,18 @@ $('#sumBatch').onchange = () => { sumShowAll = false; refreshSummary(); };
 $('#sumRefresh').onclick = () => refreshSummary();
 $('#sumExport').onclick = () => exportCsv($('#sumBatch').value ? Number($('#sumBatch').value) : null);
 
+let sumMetric = 'pct';
+const fmtK = v => v === null || v === undefined || Number.isNaN(v) ? '–' : v.toFixed(2);
+function statTile(k, v, sub, help) {
+  const L = Agree.label(v);
+  return `<div class="card stat" title="${help}"><div class="k">${k} <span class="qm">?</span></div><div class="v">${fmtK(v)}</div><div class="klabel ${L.cls}">${L.text}</div><div class="k">${sub}</div></div>`;
+}
+$('#sumMetric').querySelectorAll('button').forEach(b => b.onclick = () => {
+  sumMetric = b.dataset.m;
+  $('#sumMetric').querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
+  $('#sumMatrixNote').textContent = sumMetric === 'kappa' ? 'Cohen κ có trọng số bậc hai (thang 0–4) · số nhỏ = số ảnh chung' : '% ảnh chấm cùng độ · số nhỏ = số ảnh chung';
+  renderSummary();
+});
 function computeSummary(images, ratings, batchNames) {
   const byImg = new Map();
   ratings.forEach(r => { if (!byImg.has(r.image_id)) byImg.set(r.image_id, new Map()); byImg.get(r.image_id).set(r.user_id, r.grade); });
@@ -1403,7 +1435,27 @@ function computeSummary(images, ratings, batchNames) {
     if (!same) disagree.push({ im, entries, spread: num.length >= 2 ? Math.max(...num) - Math.min(...num) : 0, has5: gs.includes(5), batch: batchNames.get(im.batch_id) });
   });
   disagree.sort((a, b) => b.spread - a.spread || b.entries.length - a.entries.length);
-  return { images, ratings, raters, per, pair, pk, multi, full, within1, within1N, review, disagree,
+  // ---- chỉ số thống kê (chỉ thang 0–4, bỏ độ 5) ----
+  const K = 5, units = [], g04 = new Map();
+  images.forEach(im => {
+    const m = byImg.get(im.id); if (!m) return;
+    const mm = new Map([...m.entries()].filter(([, g]) => g <= 4));
+    g04.set(im.id, mm);
+    if (mm.size >= 2) units.push([...mm.values()]);
+  });
+  const pairK = new Map();
+  for (let x = 0; x < raters.length; x++) for (let y = x + 1; y < raters.length; y++) {
+    const a = [], b = [];
+    g04.forEach(mm => { if (mm.has(raters[x]) && mm.has(raters[y])) { a.push(mm.get(raters[x])); b.push(mm.get(raters[y])); } });
+    if (a.length >= 2) pairK.set(pk(raters[x], raters[y]), { n: a.length, k: Agree.cohen(a, b, K, false), kw: Agree.cohen(a, b, K, true) });
+  }
+  const complete = raters.length >= 2 ? [...g04.values()].filter(mm => raters.every(u => mm.has(u))).map(mm => raters.map(u => mm.get(u))) : [];
+  const stats = {
+    alphaOrd: units.length ? Agree.kripp(units, K, 'ordinal') : null,
+    alphaNom: units.length ? Agree.kripp(units, K, 'nominal') : null, units: units.length,
+    fleiss: complete.length >= 2 ? Agree.fleiss(complete, K) : null, complete: complete.length,
+  };
+  return { stats, pairK, images, ratings, raters, per, pair, pk, multi, full, within1, within1N, review, disagree,
     gradedImgs: byImg.size, total: images.length };
 }
 
@@ -1418,7 +1470,10 @@ function renderSummary() {
     tile('Ảnh có ≥ 2 người chấm', d.multi) +
     tile('Đồng thuận hoàn toàn', pct(d.full, d.multi), d.multi ? `${d.full}/${d.multi} ảnh mọi người cùng độ` : 'cần ≥ 2 người chấm cùng ảnh') +
     tile('Lệch tối đa 1 độ', pct(d.within1, d.within1N), d.within1N ? `${d.within1}/${d.within1N} ảnh (không tính độ 5)` : '') +
-    tile('Ảnh có người chọn “Cân nhắc”', d.review);
+    tile('Ảnh có người chọn “Cân nhắc”', d.review) +
+    statTile('Krippendorff α (thứ bậc)', d.stats.alphaOrd, `${d.stats.units} ảnh có ≥ 2 người chấm`, 'Chỉ số chính cho thang có thứ tự 0–4: tính cả mức độ lệch (lệch 1 độ nhẹ hơn lệch 3 độ), chấp nhận mỗi ảnh số người chấm khác nhau') +
+    statTile('Fleiss κ', d.stats.fleiss, d.stats.complete ? `${d.stats.complete} ảnh tất cả ${d.raters.length} người cùng chấm` : 'cần ảnh mà mọi người đều chấm', 'Đồng thuận tuyệt đối (đúng cùng độ) trên các ảnh được tất cả người chấm cùng chấm') +
+    statTile('Krippendorff α (định danh)', d.stats.alphaNom, 'chỉ tính trùng / không trùng', 'Giống Fleiss κ nhưng chấp nhận thiếu dữ liệu: coi mọi khác biệt như nhau');
 
   // theo từng người chấm
   const legend = GRADES.map(g => `<span class="lg"><i class="cg${g.g}"></i>${g.g} ${g.label}</span>`).join('');
@@ -1439,10 +1494,16 @@ function renderSummary() {
   else $('#sumMatrix').innerHTML = `<table class="matrix"><thead><tr><th></th>${R.map(u => `<th>${esc(nameOfUser(u))}</th>`).join('')}</tr></thead><tbody>${
     R.map(a => `<tr><th>${esc(nameOfUser(a))}</th>${R.map(b => {
       if (a === b) return '<td class="self">—</td>';
-      const v = d.pair.get(d.pk(a, b));
+      const v = d.pair.get(d.pk(a, b)), kk = d.pairK.get(d.pk(a, b));
       if (!v) return '<td class="na" title="Chưa chấm chung ảnh nào">·</td>';
       const r = v.same / v.n;
-      return `<td style="--a:${(0.08 + r * 0.72).toFixed(2)}" class="${r >= 0.6 ? 'hi' : ''}" title="${esc(nameOfUser(a))} & ${esc(nameOfUser(b))}: cùng độ ${v.same}/${v.n} ảnh chung">${Math.round(r * 100)}%<small>${v.n}</small></td>`;
+      const tip = `${esc(nameOfUser(a))} & ${esc(nameOfUser(b))}: cùng độ ${v.same}/${v.n} ảnh chung` + (kk ? ` · Cohen κ = ${fmtK(kk.k)} · κ có trọng số = ${fmtK(kk.kw)} (${kk.n} ảnh, không tính độ 5)` : '');
+      if (sumMetric === 'kappa') {
+        if (!kk || kk.kw === null) return `<td class="na" title="${tip}">·</td>`;
+        const q = Math.max(0, kk.kw);
+        return `<td style="--a:${(0.08 + q * 0.72).toFixed(2)}" class="${q >= 0.6 ? 'hi' : ''}" title="${tip}">${fmtK(kk.kw)}<small>${kk.n}</small></td>`;
+      }
+      return `<td style="--a:${(0.08 + r * 0.72).toFixed(2)}" class="${r >= 0.6 ? 'hi' : ''}" title="${tip}">${Math.round(r * 100)}%<small>${v.n}</small></td>`;
     }).join('')}</tr>`).join('')}</tbody></table>`;
 
   // ảnh chấm lệch nhau
@@ -1523,6 +1584,214 @@ function startIdleTimer() {
   ['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach(ev => window.addEventListener(ev, reset, { passive: true }));
   reset();
 }
+
+
+// ---------- THÙNG RÁC ----------
+const TRASH_DAYS = 30;
+const daysLeft = iso => Math.max(0, Math.ceil(TRASH_DAYS - (Date.now() - new Date(iso)) / 864e5));
+// mục trong thùng rác mà tôi được quản lý (của tôi, hoặc tất cả nếu là quản trị viên)
+async function loadTrash() {
+  const mine = q => state.isAdmin ? q : q.eq('user_id', state.user.id);
+  const batches = await fetchAll(() => mine(sb.from('batches').select('id, name, user_id, deleted_at').not('deleted_at', 'is', null)).order('deleted_at', { ascending: false }).order('id'));
+  const trashedIds = new Set(batches.map(b => b.id));
+  const images = (await fetchAll(() => mine(sb.from('images').select('id, batch_id, user_id, filename, rel_path, storage_path, deleted_at').not('deleted_at', 'is', null)).order('deleted_at', { ascending: false }).order('id')))
+    .filter(i => !trashedIds.has(i.batch_id));
+  // số ảnh trong từng lô bị xoá
+  for (const b of batches) b.count = (await fetchAll(() => sb.from('images').select('id').eq('batch_id', b.id).order('id'))).length;
+  const names = new Map((await fetchAll(() => sb.from('batches').select('id, name').order('id'))).map(b => [b.id, b.name]));
+  images.forEach(i => { i.batch = names.get(i.batch_id) || ''; });
+  return { batches, images };
+}
+async function updateTrashCount() {
+  try {
+    const t = await loadTrash();
+    const n = t.batches.length + t.images.length;
+    $('#trashCount').textContent = n ? n : '';
+    return t;
+  } catch (e) { console.error(e); }
+}
+// xoá hẳn: file trong kho ảnh + dòng dữ liệu
+async function hardDeleteImages(imgs) {
+  for (let k = 0; k < imgs.length; k += 100) {
+    const part = imgs.slice(k, k + 100);
+    check(await sb.from('images').delete().in('id', part.map(i => i.id)));
+    await sb.storage.from(BUCKET).remove(part.map(i => i.storage_path));
+  }
+}
+async function hardDeleteBatch(b) {
+  const imgs = await fetchAll(() => sb.from('images').select('id, storage_path').eq('batch_id', b.id).order('id'));
+  for (let k = 0; k < imgs.length; k += 100) await sb.storage.from(BUCKET).remove(imgs.slice(k, k + 100).map(i => i.storage_path));
+  check(await sb.from('batches').delete().eq('id', b.id));
+}
+// tự xoá hẳn các mục quá 30 ngày
+async function purgeTrash() {
+  const t = await loadTrash();
+  const old = x => daysLeft(x.deleted_at) <= 0;
+  const imgs = t.images.filter(old), bs = t.batches.filter(old);
+  if (imgs.length) await hardDeleteImages(imgs);
+  for (const b of bs) await hardDeleteBatch(b);
+  if (imgs.length || bs.length) console.info(`Đã xoá hẳn ${imgs.length} ảnh, ${bs.length} lô quá ${TRASH_DAYS} ngày`);
+}
+let trashData = null;
+async function refreshTrash() {
+  try { trashData = await updateTrashCount(); renderTrash(); } catch (e) { toast(e.message); }
+}
+function renderTrash() {
+  const t = trashData || { batches: [], images: [] };
+  const who = id => state.isAdmin && id !== state.user.id ? ` · của ${esc(nameOfUser(id))}` : '';
+  const left = d => `<span class="tleft ${daysLeft(d) <= 3 ? 'soon' : ''}">còn ${daysLeft(d)} ngày</span>`;
+  $('#trashInfo').textContent = `${t.batches.length} lô · ${t.images.length} ảnh · tự xoá hẳn sau ${TRASH_DAYS} ngày`;
+  $('#trashBatches').innerHTML = t.batches.length ? t.batches.map(b => `
+    <div class="trow" data-b="${b.id}"><div class="ticon">📁</div>
+      <div class="tinfo"><b>${esc(b.name)}</b><span class="muted">${b.count} ảnh · xoá lúc ${new Date(b.deleted_at).toLocaleString('vi-VN')}${who(b.user_id)}</span></div>
+      ${left(b.deleted_at)}
+      <button class="btn outline sm" data-act="restore">↩ Khôi phục</button>
+      <button class="btn danger-ghost sm" data-act="purge">Xoá vĩnh viễn</button></div>`).join('')
+    : '<p class="muted empty-row">Không có lô nào trong thùng rác</p>';
+  $('#trashImages').innerHTML = t.images.length ? t.images.map(i => `
+    <div class="trow" data-i="${i.id}"><div class="tthumb"><img loading="lazy" data-path="${esc(i.storage_path)}" alt=""></div>
+      <div class="tinfo"><b>${esc(i.rel_path)}</b><span class="muted">Lô: ${esc(i.batch)} · xoá lúc ${new Date(i.deleted_at).toLocaleString('vi-VN')}${who(i.user_id)}</span></div>
+      ${left(i.deleted_at)}
+      <button class="btn outline sm" data-act="restore">↩ Khôi phục</button>
+      <button class="btn danger-ghost sm" data-act="purge">Xoá vĩnh viễn</button></div>`).join('')
+    : '<p class="muted empty-row">Không có ảnh nào trong thùng rác</p>';
+  const imgs = [...$('#trashImages').querySelectorAll('img[data-path]')];
+  signUrls(imgs.map(i => ({ storage_path: i.dataset.path }))).then(() => imgs.forEach(i => { i.src = state.urls.get(i.dataset.path)?.url || ''; })).catch(() => {});
+  $('#trashPanel').querySelectorAll('.trow button').forEach(btn => btn.onclick = () => trashAction(btn.dataset.act, btn.closest('.trow')));
+}
+async function trashAction(act, row) {
+  const t = trashData;
+  try {
+    if (row.dataset.b) {
+      const b = t.batches.find(x => x.id === Number(row.dataset.b));
+      if (act === 'restore') { check(await sb.from('batches').update({ deleted_at: null }).eq('id', b.id)); toast(`Đã khôi phục lô "${b.name}"`); }
+      else { if (!confirm(`Xoá VĨNH VIỄN lô "${b.name}" (${b.count} ảnh) cùng mọi điểm và vùng khoanh? Không thể hoàn tác.`)) return; await hardDeleteBatch(b); toast('Đã xoá vĩnh viễn'); }
+    } else {
+      const i = t.images.find(x => x.id === Number(row.dataset.i));
+      if (act === 'restore') { check(await sb.from('images').update({ deleted_at: null }).eq('id', i.id)); toast('Đã khôi phục ảnh'); }
+      else { if (!confirm(`Xoá VĨNH VIỄN ảnh "${i.rel_path}"? Không thể hoàn tác.`)) return; await hardDeleteImages([i]); toast('Đã xoá vĩnh viễn'); }
+    }
+  } catch (e) { return toast(e.message); }
+  await refreshTrash(); loadBatches(); if (state.batchId) refreshImages();
+}
+$('#trashBtn').onclick = () => state.view === 'trash' ? setView('grade') : setView('trash');
+$('#trashRestoreAll').onclick = async () => {
+  const t = trashData; if (!t || !(t.batches.length + t.images.length)) return;
+  if (!confirm(`Khôi phục toàn bộ ${t.batches.length} lô và ${t.images.length} ảnh?`)) return;
+  try {
+    for (const b of t.batches) check(await sb.from('batches').update({ deleted_at: null }).eq('id', b.id));
+    for (let k = 0; k < t.images.length; k += 100) check(await sb.from('images').update({ deleted_at: null }).in('id', t.images.slice(k, k + 100).map(i => i.id)));
+    toast('Đã khôi phục tất cả');
+  } catch (e) { toast(e.message); }
+  await refreshTrash(); loadBatches();
+};
+$('#trashEmpty').onclick = async () => {
+  const t = trashData; if (!t || !(t.batches.length + t.images.length)) return;
+  if (!confirm(`Xoá VĨNH VIỄN ${t.batches.length} lô và ${t.images.length} ảnh trong thùng rác? Không thể hoàn tác.`)) return;
+  try { await hardDeleteImages(t.images); for (const b of t.batches) await hardDeleteBatch(b); toast('Đã dọn sạch thùng rác'); }
+  catch (e) { toast(e.message); }
+  await refreshTrash();
+};
+
+
+// ---------- SAO LƯU ----------
+// ZIP tối giản (không nén – ảnh JPEG vốn đã nén), tên file UTF-8
+const CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(u8) { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC_TABLE[(c ^ u8[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+function makeZip(files) { // files: [{ name, data: Uint8Array }]
+  const enc = new TextEncoder(), parts = [], central = [];
+  let offset = 0;
+  const d = new Date(), dosTime = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1),
+    dosDate = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  for (const f of files) {
+    const name = enc.encode(f.name), crc = crc32(f.data), size = f.data.length;
+    const h = new DataView(new ArrayBuffer(30));
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint16(8, 0, true);
+    h.setUint16(10, dosTime, true); h.setUint16(12, dosDate, true); h.setUint32(14, crc, true);
+    h.setUint32(18, size, true); h.setUint32(22, size, true); h.setUint16(26, name.length, true); h.setUint16(28, 0, true);
+    parts.push(h.buffer, name, f.data);
+    const c = new DataView(new ArrayBuffer(46));
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true); c.setUint16(10, 0, true);
+    c.setUint16(12, dosTime, true); c.setUint16(14, dosDate, true); c.setUint32(16, crc, true); c.setUint32(20, size, true); c.setUint32(24, size, true);
+    c.setUint16(28, name.length, true); c.setUint32(42, offset, true);
+    central.push(c.buffer, name);
+    offset += 30 + name.length + size;
+  }
+  const cdSize = central.reduce((s, x) => s + (x.byteLength ?? x.length), 0);
+  const e = new DataView(new ArrayBuffer(22));
+  e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true);
+  e.setUint32(12, cdSize, true); e.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, e.buffer], { type: 'application/zip' });
+}
+const safeName = s => String(s || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/^\.+/, '_').trim().slice(0, 120) || '_';
+
+async function runBackup(withImages) {
+  const prog = $('#uploadProgress'); prog.classList.remove('hidden');
+  const setP = (pct, label) => { $('#uploadBar').style.width = pct + '%'; $('#uploadPct').textContent = Math.round(pct) + '%'; $('#uploadLabel').textContent = label; };
+  try {
+    setP(2, 'Đang đọc dữ liệu…');
+    const users = state.isAdmin ? await loadUsers().then(() => state.users) : state.profiles;
+    const batches = await fetchAll(() => sb.from('batches').select('*').order('id'));
+    const images = await fetchAll(() => sb.from('images').select('*').order('id'));
+    const ratings = await fetchAll(() => sb.from('ratings').select('image_id, user_id, grade, note, graded_at, updated_at').order('image_id').order('user_id'));
+    const nameOf = id => users.find(u => u.id === id)?.username || nameOfUser(id);
+    const data = {
+      app: 'Plasma Grader', version: 1, exported_at: new Date().toISOString(), exported_by: displayName(state.user.email),
+      grades: GRADES, counts: { users: users.length, batches: batches.length, images: images.length, ratings: ratings.length },
+      users: users.map(u => ({ id: u.id, username: u.username, approved: u.approved, is_admin: u.is_admin, created_at: u.created_at })),
+      batches: batches.map(b => ({ ...b, owner: nameOf(b.user_id) })),
+      images: images.map(i => ({ ...i, uploader: nameOf(i.user_id) })),
+      ratings: ratings.map(r => ({ ...r, rater: nameOf(r.user_id) })),
+    };
+    const enc = new TextEncoder();
+    const files = [
+      { name: 'data.json', data: enc.encode(JSON.stringify(data, null, 1)) },
+      { name: 'ket-qua.csv', data: enc.encode((await buildCsv(null)).text) },
+      { name: 'DOC-TOI.txt', data: enc.encode(`Sao lưu Plasma Grader lúc ${new Date().toLocaleString('vi-VN')}\r\n` +
+        `- data.json: toàn bộ tài khoản (không có mật khẩu), lô, ảnh (kể cả vùng khoanh, thùng rác), điểm của từng người.\r\n` +
+        `- ket-qua.csv: bảng kết quả mở bằng Excel (mỗi người chấm một cột).\r\n` +
+        (withImages ? `- images/: ảnh đã lưu trên hệ thống, xếp theo lô (đường dẫn gốc giữ nguyên).\r\n` : '- (bản này không kèm ảnh)\r\n')) },
+    ];
+    if (withImages) {
+      const bname = new Map(batches.map(b => [b.id, safeName(b.name) + (b.deleted_at ? ' (thung rac)' : '')]));
+      const used = new Set(); let done = 0, bytes = 0, failed = 0;
+      await signUrls(images);
+      let next = 0;
+      const worker = async () => {
+        while (next < images.length) {
+          const im = images[next++];
+          try {
+            const res = await fetch(urlOf(im)); if (!res.ok) throw new Error(res.status);
+            const buf = new Uint8Array(await res.arrayBuffer()); bytes += buf.length;
+            const ext = (im.storage_path.split('.').pop() || 'jpg').toLowerCase();
+            let p = `images/${bname.get(im.batch_id) || 'lo-' + im.batch_id}/${im.rel_path.split('/').map(safeName).join('/')}`.replace(/\.[^./]+$/, '') + (im.deleted_at ? '.deleted' : '') + '.' + ext;
+            while (used.has(p)) p = p.replace(/(\.[^.]+)$/, `_${im.id}$1`);
+            used.add(p); files.push({ name: p, data: buf });
+          } catch (e) { failed++; console.error(im.rel_path, e); }
+          done++; setP(5 + done / images.length * 90, `Đang tải ảnh ${done}/${images.length} · ${fmtBytes(bytes)}`);
+        }
+      };
+      await Promise.all(Array.from({ length: 6 }, worker));
+      if (failed) toast(`${failed} ảnh không tải được – xem chi tiết trong data.json`);
+    }
+    setP(97, 'Đang đóng gói…');
+    const n = new Date(), pad = x => String(x).padStart(2, '0');
+    const stamp = `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())}_${pad(n.getHours())}h${pad(n.getMinutes())}`;
+    const zip = makeZip(files);
+    downloadBlob(zip, `plasma-grader-sao-luu-${stamp}${withImages ? '-kem-anh' : ''}.zip`);
+    setP(100, `Đã tạo bản sao lưu · ${fmtBytes(zip.size)}`);
+    localStorage.setItem('pg-last-backup', new Date().toISOString());
+    renderBackupNote();
+  } catch (e) { toast(e.message); $('#uploadLabel').textContent = '⚠ ' + e.message; }
+  setTimeout(() => prog.classList.add('hidden'), 3000);
+}
+function renderBackupNote() {
+  const t = localStorage.getItem('pg-last-backup');
+  const days = t ? Math.floor((Date.now() - new Date(t)) / 864e5) : null;
+  $('#backupNote').innerHTML = t ? `Lần sao lưu gần nhất trên máy này: <b>${new Date(t).toLocaleString('vi-VN')}</b>${days >= 7 ? ' <span class="tleft soon">– đã quá 7 ngày, nên sao lưu lại</span>' : ''}` : '<span class="tleft soon">Chưa sao lưu lần nào trên máy này</span>';
+}
+$('#backupData').onclick = () => runBackup(false);
+$('#backupFull').onclick = () => runBackup(true);
 
 // ---------- boot ----------
 if (sb) {

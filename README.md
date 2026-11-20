@@ -38,3 +38,8 @@ Row Level Security trong `setup.sql` (mỗi tài khoản chỉ đọc/sửa dữ
 - Mật khẩu mới: ≥ 8 ký tự, có chữ và số, không chứa tên đăng nhập. Tự đăng xuất sau 30 phút nếu không chọn "Ghi nhớ đăng nhập".
 - Thư viện được lưu trong `vendor/` (không tải từ CDN) và kiểm tra bằng mã băm SRI; Content-Security-Policy chỉ cho phép mã từ chính trang này và kết nối tới Supabase của dự án.
 - Chặn nhúng trang vào iframe, chặn chèn công thức khi mở CSV bằng Excel, link ảnh riêng tư hết hạn sau 2 giờ.
+
+## Thùng rác, sao lưu, chỉ số đồng thuận
+- Xoá ảnh / lô chỉ chuyển vào **Thùng rác** (thanh bên), khôi phục được trong 30 ngày; quá hạn website tự xoá hẳn. Xem `trash.sql`.
+- **Quản trị → Sao lưu**: tải ZIP gồm `data.json` (toàn bộ dữ liệu), `ket-qua.csv`, và tuỳ chọn toàn bộ ảnh.
+- **Tổng kết**: Krippendorff α (thứ bậc, định danh), Fleiss κ, Cohen κ có trọng số từng cặp (`stats.js`, đã đối chiếu với scikit-learn / statsmodels / krippendorff).
