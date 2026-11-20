@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath d=%27M16 2C16 2 6 14 6 20a10 10 0 0 0 20 0C26 14 16 2 16 2z%27 fill=%27%23e9a93a%27/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="style.css?v=15" />
+  <link rel="stylesheet" href="style.css?v=16" />
 </head>
 <body>
   <!-- ========== AUTH ========== -->
@@ -151,7 +151,10 @@
               </div>
               <div class="img-info">
                 <div class="fname" id="fname"></div>
-                <div class="save-state" id="saveState"></div>
+                <div class="info-right">
+                  <div class="save-state" id="saveState"></div>
+                  <button class="btn danger-ghost sm hidden" id="delImg" title="Xoá ảnh đang xem khỏi lô">🗑 Xoá ảnh</button>
+                </div>
               </div>
 
               <div class="seg-bar" id="segBar">
@@ -187,6 +190,14 @@
             </div>
 
             <div class="thumbs-panel">
+              <div class="thumbs-head">
+                <button class="link" id="pickMode">☐ Chọn nhiều</button>
+              </div>
+              <div class="pick-bar hidden" id="pickBar">
+                <span id="pickCount">Đã chọn 0</span>
+                <button class="link" id="pickAll">Chọn tất cả</button>
+                <button class="btn danger-ghost sm" id="pickDel" disabled>🗑 Xoá</button>
+              </div>
               <div class="filters" id="filters"></div>
               <div class="thumbs" id="thumbs"></div>
             </div>
@@ -256,8 +267,8 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="config.js?v=15"></script>
-  <script src="seg.js?v=15"></script>
-  <script src="app.js?v=15"></script>
+  <script src="config.js?v=16"></script>
+  <script src="seg.js?v=16"></script>
+  <script src="app.js?v=16"></script>
 </body>
 </html>

@@ -38,7 +38,7 @@ const USER_DOMAIN = 'users.plasma-grader.app';
 const toEmail = u => (u.includes('@') ? u : `${u}@${USER_DOMAIN}`).toLowerCase();
 const displayName = email => (email || '').endsWith('@' + USER_DOMAIN) ? email.split('@')[0] : (email || '');
 
-const state = { merge: null, profiles: [], view: 'grade', mode: 'login', user: null, batches: [], batchId: null, images: [], currentId: null, filter: 'all', channel: null, urls: new Map(),
+const state = { pick: null, merge: null, profiles: [], view: 'grade', mode: 'login', user: null, batches: [], batchId: null, images: [], currentId: null, filter: 'all', channel: null, urls: new Map(),
   isAdmin: false, scope: 'me', users: [], adminOpen: false };
 
 // ---------- helpers ----------
@@ -236,6 +236,7 @@ const urlOf = img => state.urls.get(img.storage_path)?.url || '';
 
 async function openBatch(id) {
   closeAdmin();
+  if (state.pick) setPick(false);
   if (state.view !== 'grade') { state.view = 'grade'; document.querySelectorAll('.nav-tab').forEach(b => b.classList.toggle('active', b.dataset.view === 'grade')); $('#summaryPanel').classList.add('hidden'); }
   state.batchId = id; state.filter = 'all';
   localStorage.setItem('batchId', id);
@@ -310,14 +311,16 @@ function renderThumbs() {
   const v = view(), box = $('#thumbs');
   if (!v.length) { box.innerHTML = '<div class="none-msg">Không có ảnh nào trong bộ lọc này</div>'; return; }
   box.innerHTML = v.map(i => `
-    <div class="thumb ${i.id === state.currentId ? 'current' : ''} ${RAW_EXT.test(i.storage_path) ? 'raw' : ''}" data-id="${i.id}" title="${esc(i.rel_path)}">
+    <div class="thumb ${i.id === state.currentId ? 'current' : ''} ${RAW_EXT.test(i.storage_path) ? 'raw' : ''} ${state.pick?.has(i.id) ? 'picked' : ''}" data-id="${i.id}" title="${esc(i.rel_path)}">
       <img loading="lazy" src="${esc(urlOf(i))}" alt="" />
-      <button class="del" data-del="${i.id}" title="Xoá ảnh">✕</button>
+      ${state.pick ? (canDelete(i) ? `<input type="checkbox" class="tpick" ${state.pick.has(i.id) ? 'checked' : ''} />` : '') : (canDelete(i) ? `<button class="del" data-del="${i.id}" title="Xoá ảnh">✕</button>` : '')}
       ${i.grade === null ? '<span class="badge none">–</span>' : `<span class="badge" data-g="${i.grade}">${i.grade}</span>`}
     </div>`).join('');
   box.querySelectorAll('.thumb').forEach(t => t.onclick = e => {
-    if (e.target.dataset.del) return deleteImage(Number(e.target.dataset.del));
-    select(Number(t.dataset.id));
+    const id = Number(t.dataset.id);
+    if (e.target.dataset.del) return deleteImages([id]);
+    if (state.pick) { const img = state.images.find(i => i.id === id); if (!canDelete(img)) return toast('Chỉ xoá được ảnh do bạn tải lên'); state.pick.has(id) ? state.pick.delete(id) : state.pick.add(id); updatePickBar(); return renderThumbs(); }
+    select(id);
   });
   box.querySelector('.current')?.scrollIntoView({ block: 'nearest' });
 }
@@ -325,7 +328,7 @@ function renderThumbs() {
 function showCurrent() {
   const img = current(), v = view();
   $('#stage').classList.toggle('hidden', !img);
-  if (!img) { $('#fname').textContent = 'Không có ảnh'; $('#saveState').textContent = ''; return; }
+  if (!img) { $('#fname').textContent = 'Không có ảnh'; $('#saveState').textContent = ''; $('#delImg').classList.add('hidden'); return; }
   const u = urlOf(img);
   if ($('#mainImg').getAttribute('src') !== u) $('#mainImg').src = u;
   $('#fname').textContent = img.rel_path; $('#fname').title = img.rel_path;
@@ -334,6 +337,7 @@ function showCurrent() {
   if (document.activeElement !== $('#note')) $('#note').value = img.note || '';
   setSave(img.graded_at ? 'ok' : '', img.graded_at ? 'Đã lưu lúc ' + timeStr(img.graded_at) : 'Chưa chấm');
   renderGradeSelection();
+  $('#delImg').classList.toggle('hidden', !canDelete(img));
   if (seg.shownId !== img.id) { seg.shownId = img.id; seg.sel = -1; seg.drawing = null; seg.pan = [0, 0]; if (seg.zoomFree) { seg.zoomFree = false; seg.zoomMode = localStorage.getItem('pg-zoom') || '3'; } updateDrawBtn(); }
   renderOverlay();
   if (!seg.busy.has(img.id)) setSeg('', segSummary(img));
@@ -414,17 +418,52 @@ $('#note').addEventListener('input', () => {
   noteTimer = setTimeout(() => save(img, { note: value }), 700);
 });
 
-async function deleteImage(id) {
-  if (!confirm('Xoá ảnh này khỏi lô?')) return;
-  const img = state.images.find(i => i.id === id);
+// ---------- XOÁ ẢNH ----------
+const canDelete = img => !!img && (img.user_id === state.user?.id || state.isAdmin);
+async function deleteImages(ids) {
+  const imgs = ids.map(id => state.images.find(i => i.id === id)).filter(canDelete);
+  if (!imgs.length) return toast('Chỉ xoá được ảnh do bạn tải lên');
+  const msg = imgs.length === 1
+    ? `Xoá ảnh "${imgs[0].rel_path}" khỏi lô?\nĐiểm của mọi người và vùng khoanh của ảnh này cũng bị xoá. Không thể hoàn tác.`
+    : `Xoá ${imgs.length} ảnh đã chọn?\nĐiểm của mọi người và vùng khoanh của các ảnh này cũng bị xoá. Không thể hoàn tác.`;
+  if (!confirm(msg)) return;
+  const pos = view().findIndex(i => i.id === state.currentId);
   try {
-    check(await sb.from('images').delete().eq('id', id));
-    await sb.storage.from(BUCKET).remove([img.storage_path]);
+    for (let k = 0; k < imgs.length; k += 100) {
+      const part = imgs.slice(k, k + 100);
+      check(await sb.from('images').delete().in('id', part.map(i => i.id)));
+      await sb.storage.from(BUCKET).remove(part.map(i => i.storage_path));
+    }
   } catch (e) { return toast(e.message); }
-  state.images = state.images.filter(i => i.id !== id);
-  if (state.currentId === id) state.currentId = view()[0]?.id ?? null;
+  const gone = new Set(imgs.map(i => i.id));
+  state.images = state.images.filter(i => !gone.has(i.id));
+  if (gone.has(state.currentId)) { const v = view(); state.currentId = (v[Math.min(Math.max(pos, 0), v.length - 1)] || v[0])?.id ?? null; }
+  if (state.pick) { gone.forEach(id => state.pick.delete(id)); updatePickBar(); }
+  toast(imgs.length === 1 ? 'Đã xoá ảnh' : `Đã xoá ${imgs.length} ảnh`);
   renderAll(); showCurrent(); loadBatches();
 }
+$('#delImg').onclick = () => current() && deleteImages([state.currentId]);
+function setPick(on) {
+  state.pick = on ? new Set() : null;
+  $('#pickBar').classList.toggle('hidden', !on);
+  $('#pickMode').textContent = on ? '✕ Thôi chọn' : '☐ Chọn nhiều';
+  updatePickBar(); renderThumbs();
+}
+function updatePickBar() {
+  const n = state.pick?.size || 0;
+  $('#pickCount').textContent = `Đã chọn ${n}`;
+  $('#pickDel').disabled = !n;
+  $('#pickDel').textContent = n ? `🗑 Xoá ${n} ảnh` : '🗑 Xoá';
+}
+$('#pickMode').onclick = () => setPick(!state.pick);
+$('#pickAll').onclick = () => {
+  const ok = view().filter(canDelete);
+  const all = ok.every(i => state.pick.has(i.id));
+  ok.forEach(i => all ? state.pick.delete(i.id) : state.pick.add(i.id));
+  $('#pickAll').textContent = all ? 'Chọn tất cả' : 'Bỏ chọn tất cả';
+  updatePickBar(); renderThumbs();
+};
+$('#pickDel').onclick = () => state.pick?.size && deleteImages([...state.pick]);
 
 $('#prevBtn').onclick = () => step(-1);
 $('#nextBtn').onclick = () => step(1);

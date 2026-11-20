@@ -422,3 +422,12 @@ table.matrix td.self, table.matrix td.na { background: #f3f5f7; color: var(--mut
 .batch-list li.picking { border: 1px dashed #cfd8e1; }
 .batch-list li.picked { background: var(--accent-soft); border-color: var(--accent); border-style: solid; }
 .batch-list li.nopick { opacity: .5; cursor: not-allowed; }
+
+/* ---------- Xoá ảnh ---------- */
+.info-right { display: flex; align-items: center; gap: 10px; flex: none; }
+.thumbs-head { display: flex; justify-content: flex-end; margin: -2px 0 6px; }
+.pick-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: #fdf2f2; border: 1px solid #f5d0d0; border-radius: 10px; padding: 7px 10px; margin-bottom: 10px; font-size: 12.5px; }
+.pick-bar #pickDel { margin-left: auto; }
+.thumb .tpick { position: absolute; top: 5px; left: 5px; width: 17px; height: 17px; margin: 0; accent-color: var(--danger); pointer-events: none; }
+.thumb.picked { border-color: var(--danger); box-shadow: 0 0 0 2px #fde2e2; }
+.thumb.picked img { opacity: .75; }
