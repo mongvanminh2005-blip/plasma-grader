@@ -319,3 +319,8 @@ table.users .uname { font-weight: 600; }
 
 .zoomer { position: absolute; inset: 0; transform-origin: 0 0; transition: transform .25s ease; }
 #segZoom.active { background: #1f2937; color: #fff; border-color: #1f2937; }
+
+.upload-opts { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin: 12px auto 0; width: fit-content; }
+.upload-opts .switch.small { margin-top: 0; justify-content: flex-start; }
+.overlay rect.tube { fill: none; stroke: #16a34a; stroke-width: calc(2px / var(--zf, 1)); stroke-dasharray: calc(8px / var(--zf, 1)) calc(5px / var(--zf, 1)); }
+.thumb img { object-fit: contain; background: #e9edf1; }

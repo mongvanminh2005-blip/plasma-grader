@@ -10,6 +10,9 @@ const BUCKET = 'plasma';
 let rawBusy = false;      // đang chuyển RAW → JPEG
 const MAX_SIDE = 1600;      // cạnh dài tối đa khi nén ảnh
 const JPEG_QUALITY = 0.88;
+const TUBE_MAX_H = 1200;     // chiều cao tối đa ảnh ống nghiệm đã cắt
+const TUBE_PAD = 0.12;       // lề quanh ống (tỉ lệ chiều cao ống)
+const TUBE_QUALITY = 0.88;
 const PARALLEL = 4;         // số ảnh tải lên song song
 const URL_TTL = 60 * 60 * 6; // link ảnh riêng tư có hiệu lực 6 giờ
 
@@ -678,22 +681,63 @@ function drawToJpeg(bmp, orientation, maxSide, quality) {
   return new Promise(r => c.toBlob(r, 'image/jpeg', quality));
 }
 
-// chuẩn bị ảnh trước khi tải: RAW → JPEG; ảnh thường thì thu nhỏ nếu bật "Nén ảnh"
+// xoay ảnh theo hướng EXIF của file RAW (ở độ phân giải gốc)
+function orientCanvas(bmp, o) {
+  if (!o || o === 1) return bmp;
+  const rot = o === 6 || o === 8, w = bmp.width, h = bmp.height;
+  const c = document.createElement('canvas'); c.width = rot ? h : w; c.height = rot ? w : h;
+  const ctx = c.getContext('2d');
+  if (o === 3) { ctx.translate(w, h); ctx.rotate(Math.PI); }
+  else if (o === 6) { ctx.translate(h, 0); ctx.rotate(Math.PI / 2); }
+  else if (o === 8) { ctx.translate(0, w); ctx.rotate(-Math.PI / 2); }
+  ctx.drawImage(bmp, 0, 0);
+  return c;
+}
+
+// cắt sát ống nghiệm (= gộp nắp + headspace + plasma + hồng cầu) và đổi toạ độ vùng theo ảnh đã cắt
+async function cropToTube(img, regions, maxH) {
+  const W = img.width, H = img.height;
+  const [x1, y1, x2, y2] = bboxOf(regions.flatMap(r => r.pts));
+  const pad = TUBE_PAD * (y2 - y1) * H;
+  const cx1 = Math.max(0, Math.floor(x1 * W - pad)), cy1 = Math.max(0, Math.floor(y1 * H - pad));
+  const cx2 = Math.min(W, Math.ceil(x2 * W + pad)), cy2 = Math.min(H, Math.ceil(y2 * H + pad));
+  const cw = cx2 - cx1, ch = cy2 - cy1, k = Math.min(1, maxH / ch);
+  const c = document.createElement('canvas'); c.width = Math.round(cw * k); c.height = Math.round(ch * k);
+  const ctx = c.getContext('2d'); ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, cx1, cy1, cw, ch, 0, 0, c.width, c.height);
+  const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', TUBE_QUALITY));
+  const map = ([x, y]) => [Math.round((x * W - cx1) / cw * 1e5) / 1e5, Math.round((y * H - cy1) / ch * 1e5) / 1e5];
+  const out = regions.map(r => ({ ...r, pts: r.pts.map(map), box: [...map([r.box[0], r.box[1]]), ...map([r.box[2], r.box[3]])] }));
+  return { blob, regions: out };
+}
+
+// chuẩn bị ảnh trước khi tải:
+//  - RAW (.cr2…) luôn đổi sang JPEG
+//  - "Chỉ lưu phần ống nghiệm": AI khoanh vùng rồi chỉ giữ phần ống (tiết kiệm nhất)
+//  - "Nén ảnh": thu nhỏ ảnh còn lại về tối đa 1600px
 async function prepare(file) {
-  const compress = $('#compress').checked;
-  if (RAW_EXT.test(file.name)) {
-    const { bmp, orientation } = await decodeRaw(file);
-    const blob = await drawToJpeg(bmp, orientation, compress ? MAX_SIDE : 4000, compress ? JPEG_QUALITY : 0.93);
-    bmp.close();
-    return { blob, ext: 'jpg' };
-  }
-  if (!compress || !/^image\/(jpeg|png|webp|bmp)$/.test(file.type)) return { blob: file, ext: extOf(file) };
+  const raw = RAW_EXT.test(file.name), compress = $('#compress').checked, crop = $('#cropTube').checked;
+  const decodable = raw || /^image\/(jpeg|png|webp|bmp)$/.test(file.type);
+  if (!decodable || (!raw && !compress && !crop)) return { blob: file, ext: extOf(file), regions: null };
+  let src, orientation = 1;
+  if (raw) ({ bmp: src, orientation } = await decodeRaw(file));
+  else src = await createImageBitmap(file);
+  const img = orientCanvas(src, orientation);
   try {
-    const bmp = await createImageBitmap(file);
-    if (Math.max(bmp.width, bmp.height) <= MAX_SIDE && file.size < 600 * 1024) { bmp.close(); return { blob: file, ext: extOf(file) }; }
-    const blob = await drawToJpeg(bmp, 1, MAX_SIDE, JPEG_QUALITY); bmp.close();
-    return blob && blob.size < file.size ? { blob, ext: 'jpg' } : { blob: file, ext: extOf(file) };
-  } catch { return { blob: file, ext: extOf(file) }; }
+    let regions = null;
+    if (crop) {
+      try { await ensureModel(); regions = await TubeSeg.run(img); } catch (e) { console.error('AI', e); regions = null; }
+      if (regions?.length) {
+        const r = await cropToTube(img, regions, compress ? TUBE_MAX_H : 2400);
+        return { blob: r.blob, ext: 'jpg', regions: r.regions };
+      }
+    }
+    // không tìm thấy ống (hoặc tắt cắt): lưu cả ảnh
+    if (!raw && Math.max(img.width, img.height) <= MAX_SIDE && file.size < 600 * 1024) return { blob: file, ext: extOf(file), regions };
+    const blob = await drawToJpeg(img, 1, compress ? MAX_SIDE : 4000, compress ? JPEG_QUALITY : 0.93);
+    if (!raw && blob.size >= file.size) return { blob: file, ext: extOf(file), regions };
+    return { blob, ext: 'jpg', regions };
+  } finally { if (src.close) src.close(); }
 }
 
 async function handleFiles(list) {
@@ -710,10 +754,14 @@ async function handleFiles(list) {
     $('#uploadBar').style.width = pct + '%'; $('#uploadPct').textContent = pct + '%';
     $('#uploadLabel').textContent = label;
   };
-  let batchId = uploadTarget, done = 0, failed = 0;
+  let batchId = uploadTarget, done = 0, failed = 0, saved = 0;
   try {
     if (!batchId) batchId = check(await sb.from('batches').insert({ name }).select('id').single()).id;
-    setP(0, `Đang tải 0/${list.length} ảnh…`);
+    if ($('#cropTube').checked) {
+      setP(0, 'Đang tải mô hình AI…');
+      try { await ensureModel(); } catch (e) { toast('Không tải được AI – sẽ lưu cả ảnh'); }
+    }
+    setP(0, `Đang xử lý 0/${list.length} ảnh…`);
     const rows = [];
     const flush = async (force) => {
       if (rows.length && (force || rows.length >= 25)) {
@@ -726,21 +774,23 @@ async function handleFiles(list) {
       while (next < list.length) {
         const x = list[next++];
         try {
-          const { blob, ext } = await prepare(x.file);
+          const { blob, ext, regions } = await prepare(x.file);
           const path = `${uid}/${batchId}/${crypto.randomUUID()}.${ext}`;
           check(await sb.storage.from(BUCKET).upload(path, blob, { contentType: blob.type || 'image/jpeg', upsert: false }));
-          rows.push({ batch_id: batchId, filename: x.file.name, rel_path: x.path, storage_path: path });
+          rows.push({ batch_id: batchId, filename: x.file.name, rel_path: x.path, storage_path: path,
+            ...(regions ? { regions, regions_source: 'ai', regions_at: new Date().toISOString() } : {}) });
+          saved += blob.size;
           await flush(false);
         } catch (e) { failed++; console.error(x.path, e); }
         done++;
-        setP(done, `Đang tải ${done}/${list.length} ảnh…`);
+        setP(done, `Đang xử lý ${done}/${list.length} ảnh · ${fmtBytes(saved)}`);
       }
     };
     const hasRaw = list.some(x => RAW_EXT.test(x.file.name));
     await Promise.all(Array.from({ length: hasRaw ? 2 : PARALLEL }, worker));
     await flush(true);
     setP(list.length, failed ? `Xong – ${failed} ảnh lỗi` : 'Hoàn tất');
-    toast(failed ? `Đã tải ${list.length - failed} ảnh, ${failed} ảnh lỗi` : `Đã tải lên ${list.length} ảnh`);
+    toast((failed ? `Đã tải ${list.length - failed} ảnh, ${failed} ảnh lỗi` : `Đã tải lên ${list.length} ảnh`) + ` · dung lượng ${fmtBytes(saved)}`);
     await loadBatches();
     await openBatch(batchId);
   } catch (e) { toast(e.message); $('#uploadLabel').textContent = '⚠ ' + e.message; }
@@ -797,6 +847,7 @@ const REGION_CLASSES = [
   { name: 'plasma', label: 'Plasma', hex: '#eab308' },
   { name: 'bloodcell', label: 'Hồng cầu', hex: '#dc2626' },
 ];
+const TUBE_LAYER = { name: 'tube', label: 'Ống nghiệm', hex: '#16a34a' };
 const regClass = r => REGION_CLASSES.find(c => c.name === r.name) || { label: r.name, hex: '#a855f7' };
 const seg = { hidden: new Set(JSON.parse(localStorage.getItem('pg-seg-hidden') || '[]')), editing: false, drawing: null, sel: -1, busy: new Set(), drag: null, shownId: null };
 const ORT_URL = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/ort.wasm.min.js';
@@ -824,6 +875,9 @@ function plasmaRatio(regions) {
   return p && c ? Math.round(p / (p + c) * 1000) / 10 : '';
 }
 
+const cropBox = $('#cropTube');
+cropBox.checked = localStorage.getItem('pg-crop') !== '0';
+cropBox.onchange = () => localStorage.setItem('pg-crop', cropBox.checked ? '1' : '0');
 const autoSegBox = $('#autoSeg');
 autoSegBox.checked = localStorage.getItem('pg-autoseg') !== '0';
 autoSegBox.onchange = () => { localStorage.setItem('pg-autoseg', autoSegBox.checked ? '1' : '0'); if (autoSegBox.checked) maybeAutoSeg(); };
@@ -915,6 +969,12 @@ function renderOverlay() {
     const b = bboxOf(r.pts), c = regClass(r);
     html += `<text x="${(b[2] * W + 6 * upp).toFixed(1)}" y="${(((b[1] + b[3]) / 2) * H + 4 * upp).toFixed(1)}" font-size="${(12 * upp).toFixed(1)}" stroke-width="${(3 * upp).toFixed(1)}">${c.label}${r.conf != null && r.src !== 'manual' ? ' ' + Math.round(r.conf * 100) + '%' : ''}</text>`;
   });
+  const shown = regs.filter(r => r.pts?.length);
+  if (shown.length && !seg.hidden.has('tube')) {
+    const [x1, y1, x2, y2] = bboxOf(shown.flatMap(r => r.pts)), m = 4 * upp;
+    html += `<rect class="tube" x="${(x1 * W - m).toFixed(1)}" y="${(y1 * H - m).toFixed(1)}" width="${((x2 - x1) * W + 2 * m).toFixed(1)}" height="${((y2 - y1) * H + 2 * m).toFixed(1)}" rx="${(4 * upp).toFixed(1)}"/>`;
+    html += `<text x="${(x1 * W - m).toFixed(1)}" y="${(y1 * H - m - 5 * upp).toFixed(1)}" font-size="${(12 * upp).toFixed(1)}" stroke-width="${(3 * upp).toFixed(1)}">Ống nghiệm</text>`;
+  }
   if (seg.editing) regs.forEach((r, i) => {
     if (seg.hidden.has(r.name) || (seg.sel !== -1 && seg.sel !== i)) return;
     const c = regClass(r);
@@ -930,7 +990,8 @@ function renderOverlay() {
 function renderLegend() {
   const img = current(), counts = {};
   (img?.regions || []).forEach(r => { counts[r.name] = (counts[r.name] || 0) + 1; });
-  $('#segLegend').innerHTML = REGION_CLASSES.map(c =>
+  if ((img?.regions || []).length) counts.tube = 1;
+  $('#segLegend').innerHTML = [TUBE_LAYER, ...REGION_CLASSES].map(c =>
     `<button class="seg-chip ${seg.hidden.has(c.name) ? 'off' : ''}" data-n="${c.name}" title="Bật/tắt hiển thị ${c.label}"><i style="background:${c.hex}"></i>${c.label}${counts[c.name] ? `<span class="c">${counts[c.name]}</span>` : ''}</button>`).join('');
   $('#segLegend').querySelectorAll('.seg-chip').forEach(b => b.onclick = () => {
     seg.hidden.has(b.dataset.n) ? seg.hidden.delete(b.dataset.n) : seg.hidden.add(b.dataset.n);
