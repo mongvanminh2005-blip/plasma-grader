@@ -38,7 +38,7 @@ const USER_DOMAIN = 'users.plasma-grader.app';
 const toEmail = u => (u.includes('@') ? u : `${u}@${USER_DOMAIN}`).toLowerCase();
 const displayName = email => (email || '').endsWith('@' + USER_DOMAIN) ? email.split('@')[0] : (email || '');
 
-const state = { mode: 'login', user: null, batches: [], batchId: null, images: [], currentId: null, filter: 'all', channel: null, urls: new Map(),
+const state = { profiles: [], view: 'grade', mode: 'login', user: null, batches: [], batchId: null, images: [], currentId: null, filter: 'all', channel: null, urls: new Map(),
   isAdmin: false, scope: 'me', users: [], adminOpen: false };
 
 // ---------- helpers ----------
@@ -122,10 +122,11 @@ async function startApp(user) {
   const dn = displayName(user.email); $('#username').textContent = dn; $('#avatar').textContent = (dn || '?')[0];
   buildGradeButtons();
   state.isAdmin = !!(await sb.rpc('is_admin')).data;
-  state.scope = state.isAdmin ? (localStorage.getItem('pg-scope') || 'me') : 'me';
+  state.scope = localStorage.getItem('pg-scope') || 'all';
   $('#adminBtn').classList.toggle('hidden', !state.isAdmin);
-  $('#scopeBox').classList.toggle('hidden', !state.isAdmin);
-  if (state.isAdmin) await loadUsers().catch(e => { console.error(e); renderScope(); });
+  $('#scopeBox').classList.remove('hidden');
+  await loadProfiles().catch(e => { console.error(e); state.profiles = []; renderScope(); });
+  if (state.isAdmin) await loadUsers().catch(e => console.error(e));
   applySegOn();
   connectLive();
   await loadBatches();
@@ -141,19 +142,28 @@ function connectLive() {
   const refreshBatches = debounce(loadBatches, 400);
   const refreshCurrent = debounce(() => state.batchId && refreshImages(), 500);
   state.channel = sb.channel('pg-' + uid)
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'images', ...(state.isAdmin ? {} : { filter: `user_id=eq.${uid}` }) }, p => {
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'images' }, p => {
       const d = p.new, img = state.images.find(i => i.id === d.id);
       const editingThis = seg.editing && d.id === state.currentId;
-      const regChanged = img && !editingThis && JSON.stringify(img.regions ?? null) !== JSON.stringify(d.regions ?? null);
-      if (img && (img.grade !== d.grade || img.note !== d.note || regChanged)) {
-        Object.assign(img, { grade: d.grade, note: d.note, graded_at: d.graded_at });
-        if (regChanged) Object.assign(img, { regions: d.regions, regions_source: d.regions_source, regions_at: d.regions_at });
+      if (img && !editingThis && JSON.stringify(img.regions ?? null) !== JSON.stringify(d.regions ?? null)) {
+        Object.assign(img, { regions: d.regions, regions_source: d.regions_source, regions_at: d.regions_at });
         renderAll();
-        if (d.id === state.currentId) { showCurrent(); }
+        if (d.id === state.currentId) showCurrent();
+      }
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'ratings' }, p => {
+      const d = p.new && p.new.image_id ? p.new : null;
+      if (d && d.user_id === uid) {   // điểm của tôi thay đổi ở thiết bị khác
+        const img = state.images.find(i => i.id === d.image_id);
+        if (img && (img.grade !== d.grade || img.note !== d.note)) {
+          Object.assign(img, { grade: d.grade, note: d.note, graded_at: d.graded_at });
+          renderAll(); if (d.image_id === state.currentId) showCurrent();
+        }
       }
       refreshBatches();
+      if (state.view === 'summary') refreshSummarySoon();
     })
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'images', ...(state.isAdmin ? {} : { filter: `user_id=eq.${uid}` }) }, p => {
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'images' }, p => {
       if (p.new.batch_id === state.batchId && !state.images.some(i => i.id === p.new.id)) refreshCurrent();
       refreshBatches();
     })
@@ -190,19 +200,25 @@ function renderBatches() {
   else ul.innerHTML = state.batches.map(b => {
     const pct = b.total ? Math.round(b.graded / b.total * 100) : 0;
     return `<li data-id="${b.id}" class="${b.id === state.batchId ? 'active' : ''}">
-      <div class="bn" title="${esc(b.name)}">${b.user_id !== state.user?.id ? `<span class="owner-tag">${esc(b.owner || '?')}</span>` : ''}${esc(b.name)}</div>
-      <div class="bm"><span>${b.graded}/${b.total} ảnh · ${dateStr(b.created_at)}</span>
+      <div class="bn" title="${esc(b.name)}">${b.user_id !== state.user?.id ? `<span class="owner-tag">${esc(b.owner || '?')}</span>` : (b.shared ? '' : '<span class="owner-tag lock" title="Lô riêng">🔒</span>')}${esc(b.name)}</div>
+      <div class="bm"><span>Tôi: ${b.graded}/${b.total} · 👥 ${b.raters || 0} · ${dateStr(b.created_at)}</span>
         ${pct === 100 && b.total ? '<span class="done">Xong</span>' : `<span>${pct}%</span>`}</div>
       <div class="bar"><i style="width:${pct}%"></i></div></li>`;
   }).join('');
   ul.querySelectorAll('li[data-id]').forEach(li => li.onclick = () => openBatch(Number(li.dataset.id)));
-  $('#emptyState').classList.toggle('hidden', !!state.batchId || state.adminOpen);
+  $('#emptyState').classList.toggle('hidden', !!state.batchId || state.view !== 'grade');
 }
 
 async function fetchImages(batchId) {
   const imgs = await fetchAll(() => sb.from('images')
-    .select('id, batch_id, filename, rel_path, storage_path, grade, note, graded_at, regions, regions_source, regions_at')
+    .select('id, batch_id, user_id, filename, rel_path, storage_path, regions, regions_source, regions_at')
     .eq('batch_id', batchId).order('rel_path').order('id'));
+  // điểm của chính mình (mỗi người có điểm riêng)
+  const mine = await fetchAll(() => sb.from('ratings')
+    .select('image_id, grade, note, graded_at, images!inner(batch_id)')
+    .eq('user_id', state.user.id).eq('images.batch_id', batchId).order('image_id'));
+  const byId = new Map(mine.map(r => [r.image_id, r]));
+  imgs.forEach(i => { const r = byId.get(i.id); i.grade = r?.grade ?? null; i.note = r?.note ?? ''; i.graded_at = r?.graded_at ?? null; });
   await signUrls(imgs);
   return imgs;
 }
@@ -218,6 +234,7 @@ const urlOf = img => state.urls.get(img.storage_path)?.url || '';
 
 async function openBatch(id) {
   closeAdmin();
+  if (state.view !== 'grade') { state.view = 'grade'; document.querySelectorAll('.nav-tab').forEach(b => b.classList.toggle('active', b.dataset.view === 'grade')); $('#summaryPanel').classList.add('hidden'); }
   state.batchId = id; state.filter = 'all';
   localStorage.setItem('batchId', id);
   renderBatches();
@@ -253,8 +270,15 @@ function renderAll() {
   if (document.activeElement !== $('#batchName')) $('#batchName').value = b.name;
   const total = state.images.length, graded = state.images.filter(i => i.grade !== null).length;
   const other = b.user_id !== state.user.id;
-  $('#batchMeta').textContent = `${total} ảnh · tạo ngày ${dateStr(b.created_at)}` + (other ? ` · của tài khoản ${b.owner || '?'}` : '');
+  $('#batchMeta').textContent = `${total} ảnh · tạo ngày ${dateStr(b.created_at)}`;
   $('#addToBatch').classList.toggle('hidden', other);
+  const canManage = !other || state.isAdmin;
+  $('#sharedBox').classList.toggle('hidden', !canManage);
+  $('#batchShared').checked = !!b.shared;
+  $('#deleteBatch').classList.toggle('hidden', !canManage);
+  $('#batchName').readOnly = !canManage;
+  if (other) $('#batchMeta').textContent = `${total} ảnh · lô chung của ${b.owner || '?'} · ${b.raters || 0} người đã chấm`;
+  else $('#batchMeta').textContent += ` · ${b.shared ? 'lô chung' : 'lô riêng'} · ${b.raters || 0} người đã chấm`;
   const raws = state.images.filter(i => RAW_EXT.test(i.storage_path));
   $('#rawBanner').classList.toggle('hidden', !raws.length || rawBusy);
   if (raws.length) $('#rawText').textContent = `${raws.length} ảnh đang lưu ở dạng RAW (trình duyệt không hiển thị được và tốn dung lượng). Chuyển sang JPEG để xem, chấm và giải phóng dung lượng — kết quả đã chấm được giữ nguyên.`;
@@ -308,7 +332,7 @@ function showCurrent() {
   if (document.activeElement !== $('#note')) $('#note').value = img.note || '';
   setSave(img.graded_at ? 'ok' : '', img.graded_at ? 'Đã lưu lúc ' + timeStr(img.graded_at) : 'Chưa chấm');
   renderGradeSelection();
-  if (seg.shownId !== img.id) { seg.shownId = img.id; seg.sel = -1; seg.drawing = null; seg.pan = [0, 0]; updateDrawBtn(); }
+  if (seg.shownId !== img.id) { seg.shownId = img.id; seg.sel = -1; seg.drawing = null; seg.pan = [0, 0]; if (seg.zoomFree) { seg.zoomFree = false; seg.zoomMode = localStorage.getItem('pg-zoom') || '3'; } updateDrawBtn(); }
   renderOverlay();
   if (!seg.busy.has(img.id)) setSeg('', segSummary(img));
   maybeAutoSeg();
@@ -342,7 +366,14 @@ function setSave(cls, text) { const s = $('#saveState'); s.className = 'save-sta
 async function save(img, patch) {
   setSave('saving', 'Đang lưu…');
   try {
-    const r = check(await sb.from('images').update(patch).eq('id', img.id).select('grade, note, graded_at').single());
+    const row = {
+      image_id: img.id, user_id: state.user.id,
+      grade: 'grade' in patch ? patch.grade : img.grade,
+      note: 'note' in patch ? patch.note : (img.note || ''),
+      graded_at: 'graded_at' in patch ? patch.graded_at : img.graded_at,
+      updated_at: new Date().toISOString(),
+    };
+    const r = check(await sb.from('ratings').upsert(row, { onConflict: 'image_id,user_id' }).select('grade, note, graded_at').single());
     Object.assign(img, r);
     if (img.id === state.currentId) setSave('ok', r.graded_at ? 'Đã lưu lúc ' + timeStr(r.graded_at) : 'Đã lưu');
     return true;
@@ -420,6 +451,13 @@ $('#batchName').addEventListener('change', async e => {
   catch (ex) { toast(ex.message); }
 });
 $('#batchName').addEventListener('keydown', e => e.key === 'Enter' && e.target.blur());
+$('#batchShared').onchange = async e => {
+  try {
+    check(await sb.from('batches').update({ shared: e.target.checked }).eq('id', state.batchId));
+    toast(e.target.checked ? 'Lô chung: mọi người có thể xem và chấm' : 'Lô riêng: chỉ bạn (và quản trị viên) thấy');
+    loadBatches().then(renderAll);
+  } catch (ex) { e.target.checked = !e.target.checked; toast(ex.message); }
+};
 $('#deleteBatch').onclick = async () => {
   const b = batch();
   if (!confirm(`Xoá lô "${b.name}" cùng toàn bộ ${b.total} ảnh và kết quả? Không thể hoàn tác.`)) return;
@@ -433,34 +471,57 @@ $('#deleteBatch').onclick = async () => {
 };
 
 // ---------- export CSV ----------
-// owner: undefined = theo phạm vi đang xem, 'all' = mọi tài khoản (quản trị)
-async function exportCsv(batchId, owner) {
+// ---------- dữ liệu điểm của mọi người ----------
+// batchId: một lô; null: mọi lô đang xem được
+async function loadRatingData(batchId) {
+  const images = await fetchAll(() => {
+    const q = sb.from('images').select('id, batch_id, user_id, filename, rel_path, storage_path, regions, regions_source').order('batch_id').order('rel_path').order('id');
+    return batchId ? q.eq('batch_id', batchId) : q;
+  });
+  const ratings = await fetchAll(() => {
+    const q = sb.from('ratings').select('image_id, user_id, grade, note, graded_at, images!inner(batch_id)').not('grade', 'is', null).order('image_id').order('user_id');
+    return batchId ? q.eq('images.batch_id', batchId) : q;
+  });
+  if (!state.profiles.length) await loadProfiles().catch(() => {});
+  return { images, ratings };
+}
+const modeOf = arr => {
+  const c = {}; arr.forEach(g => { c[g] = (c[g] || 0) + 1; });
+  const max = Math.max(...Object.values(c));
+  return Object.keys(c).filter(k => c[k] === max).map(Number);
+};
+
+// xuất CSV: mỗi ảnh một dòng, mỗi người chấm một cột
+async function exportCsv(batchId) {
   try {
-    const scope = owner || (state.isAdmin ? state.scope : 'me');
-    const rows = await fetchAll(() => {
-      let q = sb.from('images').select('user_id, rel_path, filename, grade, note, graded_at, regions, regions_source, batch_id, batches(name)').order('batch_id').order('rel_path');
-      if (batchId) return q.eq('batch_id', batchId);
-      if (scope === 'me') return q.eq('user_id', state.user.id);
-      return scope === 'all' ? q : q.eq('user_id', scope);
-    });
-    if (state.isAdmin && !state.users.length) await loadUsers().catch(() => {});
-    const nameOf = id => id === state.user.id ? displayName(state.user.email) : (state.users.find(u => u.id === id)?.username || id);
+    toast('Đang chuẩn bị file CSV…');
+    const { images, ratings } = await loadRatingData(batchId);
+    const batchName = new Map((await fetchAll(() => sb.from('batch_stats').select('id, name').order('id'))).map(b => [b.id, b.name]));
+    const raters = [...new Set(ratings.map(r => r.user_id))].sort((a, b) => nameOfUser(a).localeCompare(nameOfUser(b)));
+    const byImg = new Map(); ratings.forEach(r => { if (!byImg.has(r.image_id)) byImg.set(r.image_id, new Map()); byImg.get(r.image_id).set(r.user_id, r); });
     const labelOf = g => GRADES.find(x => x.g === g)?.label || '';
     const e = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const head = ['Lô', 'Đường dẫn', 'Tên file', 'Độ', 'Mức', 'Ghi chú', 'Thời gian chấm', 'Khoanh vùng', 'Số vùng', 'Plasma / (plasma + hồng cầu) theo chiều cao (%)'];
-    if (state.isAdmin) head.unshift('Người tải');
+    const head = ['Lô', 'Người tải', 'Đường dẫn', 'Tên file', ...raters.map(u => 'Độ – ' + nameOfUser(u)),
+      'Số người chấm', 'Độ phổ biến nhất', 'Mức', 'Đồng thuận', 'Chênh lệch (0–4)', 'Ghi chú',
+      'Khoanh vùng', 'Plasma / (plasma + hồng cầu) theo chiều cao (%)'];
     const lines = [head.map(e).join(',')];
-    rows.forEach(r => {
-      const row = [r.batches?.name, r.rel_path, r.filename, r.grade, labelOf(r.grade), r.note,
-        r.graded_at ? new Date(r.graded_at).toLocaleString('vi-VN') : '',
-        r.regions ? (r.regions_source === 'manual' ? 'Chỉnh tay' : 'AI') : '', r.regions ? r.regions.length : '', plasmaRatio(r.regions)];
-      if (state.isAdmin) row.unshift(nameOf(r.user_id));
-      lines.push(row.map(e).join(','));
+    images.forEach(im => {
+      const m = byImg.get(im.id) || new Map();
+      const gs = [...m.values()].map(r => r.grade);
+      const num = gs.filter(g => g <= 4);
+      const md = gs.length ? modeOf(gs) : [];
+      const notes = [...m.entries()].filter(([, r]) => r.note).map(([u, r]) => `${nameOfUser(u)}: ${r.note}`).join(' | ');
+      lines.push([batchName.get(im.batch_id), nameOfUser(im.user_id), im.rel_path, im.filename,
+        ...raters.map(u => m.get(u)?.grade ?? ''), gs.length,
+        md.length === 1 ? md[0] : md.join('/'), md.length === 1 ? labelOf(md[0]) : '',
+        gs.length >= 2 ? (new Set(gs).size === 1 ? 'Đồng ý' : 'Khác nhau') : '',
+        num.length >= 2 ? Math.max(...num) - Math.min(...num) : '', notes,
+        im.regions ? (im.regions_source === 'manual' ? 'Chỉnh tay' : 'AI') : '', plasmaRatio(im.regions)].map(e).join(','));
     });
     const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = batchId ? `ket-qua-${(batch()?.name || 'lo').replace(/[\\/:*?"<>|]/g, '_')}.csv` : 'ket-qua-tat-ca.csv';
+    a.download = batchId ? `ket-qua-${(batchName.get(batchId) || 'lo').replace(/[\\/:*?"<>|]/g, '_')}.csv` : 'ket-qua-tat-ca.csv';
     a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   } catch (ex) { toast(ex.message); }
 }
@@ -474,14 +535,18 @@ const FREE_STORAGE = 1024 ** 3, FREE_DB = 500 * 1024 ** 2;
 
 async function loadUsers() {
   state.users = check(await sb.rpc('admin_list_users'));
+}
+async function loadProfiles() {
+  state.profiles = check(await sb.from('profiles').select('id, username').order('username'));
   renderScope();
 }
+const nameOfUser = id => id === state.user?.id ? displayName(state.user.email) : (state.profiles.find(p => p.id === id)?.username || '?');
 function renderScope() {
   const sel = $('#scopeSelect');
-  const others = state.users.filter(u => u.id !== state.user.id);
-  sel.innerHTML = `<option value="me">Của tôi</option><option value="all">Tất cả tài khoản</option>` +
-    others.map(u => `<option value="${u.id}">${esc(u.username)}</option>`).join('');
-  if (![...sel.options].some(o => o.value === state.scope)) state.scope = 'me';
+  const others = (state.profiles || []).filter(u => u.id !== state.user.id);
+  sel.innerHTML = `<option value="all">Tất cả (của tôi + lô chung)</option><option value="me">Lô của tôi</option>` +
+    others.map(u => `<option value="${u.id}">Lô của ${esc(u.username)}</option>`).join('');
+  if (![...sel.options].some(o => o.value === state.scope)) state.scope = 'all';
   sel.value = state.scope;
 }
 $('#scopeSelect').onchange = async e => {
@@ -497,11 +562,29 @@ function viewUserData(uid) {
   loadBatches().then(() => state.batches[0] ? openBatch(state.batches[0].id) : (closeAdmin(), toast('Tài khoản này chưa có lô ảnh nào')));
 }
 
+function setView(v) {
+  state.view = v;
+  document.querySelectorAll('.nav-tab').forEach(b => b.classList.toggle('active', b.dataset.view === v));
+  $('#summaryPanel').classList.toggle('hidden', v !== 'summary');
+  if (v !== 'admin') closeAdmin();
+  if (v === 'grade') {
+    $('#workspace').classList.toggle('hidden', !state.batchId);
+    renderBatches();
+    if (!state.batchId && state.batches[0]) openBatch(state.batches[0].id);
+  } else {
+    $('#workspace').classList.add('hidden'); $('#emptyState').classList.add('hidden');
+  }
+  if (v === 'summary') refreshSummary();
+}
+document.querySelectorAll('.nav-tab').forEach(b => b.onclick = () => setView(b.dataset.view));
 function closeAdmin() {
   state.adminOpen = false;
   $('#adminPanel').classList.add('hidden'); $('#adminBtn').classList.remove('active');
 }
 async function openAdmin() {
+  state.view = 'admin';
+  document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
+  $('#summaryPanel').classList.add('hidden');
   state.adminOpen = true;
   $('#adminBtn').classList.add('active');
   $('#workspace').classList.add('hidden'); $('#emptyState').classList.add('hidden');
@@ -509,9 +592,9 @@ async function openAdmin() {
   state.batchId = null; renderBatches();
   await refreshAdmin();
 }
-$('#adminBtn').onclick = () => state.adminOpen ? (closeAdmin(), state.batches[0] ? openBatch(state.batches[0].id) : renderBatches()) : openAdmin();
+$('#adminBtn').onclick = () => state.adminOpen ? setView('grade') : openAdmin();
 $('#adminRefresh').onclick = () => refreshAdmin();
-$('#adminExport').onclick = () => exportCsv(null, 'all');
+$('#adminExport').onclick = () => exportCsv(null);
 $('#adminDashboard').href = 'https://supabase.com/dashboard/project/' + (cfg.SUPABASE_URL || '').replace(/^https:\/\/|\.supabase\.co.*$/g, '');
 
 async function refreshAdmin() {
@@ -1016,9 +1099,9 @@ function renderLegend() {
   if ((img?.regions || []).length) counts.tube = 1;
   if ((img?.regions || []).length) counts.blackout = '';
   $('#segLegend').innerHTML = [{ name: 'blackout', label: 'Nền đen', hex: '#000' }, TUBE_LAYER, ...REGION_CLASSES].map(c =>
-    `<button class="seg-chip ${seg.hidden.has(c.name) ? 'off' : ''}" data-n="${c.name}" title="Bật/tắt hiển thị ${c.label}"><i style="background:${c.hex}"></i>${c.label}${counts[c.name] ? `<span class="c">${counts[c.name]}</span>` : ''}</button>`).join('');
-  $('#segLegend').querySelectorAll('.seg-chip').forEach(b => b.onclick = () => {
-    seg.hidden.has(b.dataset.n) ? seg.hidden.delete(b.dataset.n) : seg.hidden.add(b.dataset.n);
+    `<label class="layer-cb" title="Hiện/ẩn ${c.label}"><input type="checkbox" data-n="${c.name}" ${seg.hidden.has(c.name) ? '' : 'checked'} /><i style="background:${c.hex}"></i>${c.label}${counts[c.name] ? `<span class="c">${counts[c.name]}</span>` : ''}</label>`).join('');
+  $('#segLegend').querySelectorAll('input[data-n]').forEach(b => b.onchange = () => {
+    b.checked ? seg.hidden.delete(b.dataset.n) : seg.hidden.add(b.dataset.n);
     localStorage.setItem('pg-seg-hidden', JSON.stringify([...seg.hidden]));
     renderOverlay();
   });
@@ -1113,17 +1196,20 @@ function zoomTarget() {
   if (!W || !H) return null;
   const k = Math.min(sw / W, sh / H), ox = (sw - W * k) / 2, oy = (sh - H * k) / 2;
   const regs = segOn() ? (img?.regions || []).filter(r => r.pts?.length) : [];
-  let cx = sw / 2, cy = sh / 2, f;
+  let cx = sw / 2, cy = sh / 2, f, fitF = Infinity;
   if (regs.length) {
     let [x1, y1, x2, y2] = bboxOf(regs.flatMap(r => r.pts));
     x1 = ox + x1 * W * k; x2 = ox + x2 * W * k; y1 = oy + y1 * H * k; y2 = oy + y2 * H * k;
     cx = (x1 + x2) / 2; cy = (y1 + y2) / 2;
-    if (seg.zoomMode === 'fit') {
-      const pad = 0.08 * Math.max(x2 - x1, y2 - y1);
-      f = Math.max(1, Math.min(sw / (x2 - x1 + 2 * pad), sh / (y2 - y1 + 2 * pad), 12));
-    }
+    const pad = 0.08 * Math.max(x2 - x1, y2 - y1);
+    fitF = Math.max(1, Math.min(sw / (x2 - x1 + 2 * pad), sh / (y2 - y1 + 2 * pad), 12));
+    if (seg.zoomMode === 'fit') f = fitF;
   }
-  if (!f) f = seg.zoomMode === 'fit' ? 1 : Number(seg.zoomMode) || 1;
+  if (!f) {
+    f = seg.zoomMode === 'fit' ? 1 : Number(seg.zoomMode) || 1;
+    // các mức có sẵn (1×–4×) không phóng quá mức "vừa ống" để luôn thấy trọn ống; lăn chuột thì không giới hạn
+    if (!seg.zoomFree) f = Math.min(f, fitF);
+  }
   return { f, cx, cy, sw, sh };
 }
 function applyZoom() {
@@ -1143,7 +1229,7 @@ function applyZoom() {
   lastZoom = { f };
 }
 function setZoom(mode) {
-  seg.zoomMode = String(mode); seg.pan = [0, 0];
+  seg.zoomMode = String(mode); seg.pan = [0, 0]; seg.zoomFree = false;
   localStorage.setItem('pg-zoom', seg.zoomMode);
   applyZoom();
 }
@@ -1173,14 +1259,130 @@ window.addEventListener('resize', debounce(applyZoom, 100));
     if (seg.editing && seg.drawing) return;
     e.preventDefault();
     const levels = [1, 1.5, 2, 3, 4, 6, 8];
-    const cur = seg.zoomMode === 'fit' ? lastZoom.f : Number(seg.zoomMode);
+    const cur = lastZoom.f;
     let i = levels.findIndex(v => v >= cur - 0.01); if (i < 0) i = levels.length - 1;
     i = Math.max(0, Math.min(levels.length - 1, i + (e.deltaY < 0 ? 1 : -1)));
-    seg.zoomMode = String(levels[i]); localStorage.setItem('pg-zoom', seg.zoomMode);
+    seg.zoomMode = String(levels[i]); seg.zoomFree = true;
     seg.pan = seg.pan.map(v => v * levels[i] / (cur || 1));
     applyZoom(); setTimeout(renderOverlay, 260);
   }, { passive: false });
 })();
+
+
+// ---------- TỔNG KẾT: mọi người chấm thế nào ----------
+const refreshSummarySoon = debounce(() => refreshSummary(true), 800);
+let sumData = null, sumShowAll = false;
+async function refreshSummary(quiet) {
+  const sel = $('#sumBatch');
+  try {
+    if (!quiet) $('#sumBody').classList.add('loading');
+    const batches = await fetchAll(() => sb.from('batch_stats').select('id, name, owner, total, raters').order('id', { ascending: false }));
+    const cur = sel.value;
+    sel.innerHTML = `<option value="">Tất cả lô (${batches.length})</option>` + batches.map(b => `<option value="${b.id}">${esc(b.name)} · ${esc(b.owner || '')} · ${b.total} ảnh</option>`).join('');
+    sel.value = [...sel.options].some(o => o.value === cur) ? cur : '';
+    const bid = sel.value ? Number(sel.value) : null;
+    const { images, ratings } = await loadRatingData(bid);
+    sumData = computeSummary(images, ratings, new Map(batches.map(b => [b.id, b.name])));
+    renderSummary();
+  } catch (e) { toast(e.message); }
+  $('#sumBody').classList.remove('loading');
+}
+$('#sumBatch').onchange = () => { sumShowAll = false; refreshSummary(); };
+$('#sumRefresh').onclick = () => refreshSummary();
+$('#sumExport').onclick = () => exportCsv($('#sumBatch').value ? Number($('#sumBatch').value) : null);
+
+function computeSummary(images, ratings, batchNames) {
+  const byImg = new Map();
+  ratings.forEach(r => { if (!byImg.has(r.image_id)) byImg.set(r.image_id, new Map()); byImg.get(r.image_id).set(r.user_id, r.grade); });
+  const raters = [...new Set(ratings.map(r => r.user_id))].sort((a, b) => nameOfUser(a).localeCompare(nameOfUser(b)));
+  const per = new Map(raters.map(u => [u, { u, n: 0, dist: [0, 0, 0, 0, 0, 0], sum: 0, cnt04: 0, agree: 0, agreeN: 0 }]));
+  let multi = 0, full = 0, within1 = 0, within1N = 0, review = 0;
+  const disagree = [];
+  const pair = new Map(); const pk = (a, b) => a < b ? a + '|' + b : b + '|' + a;
+  images.forEach(im => {
+    const m = byImg.get(im.id); if (!m) return;
+    const entries = [...m.entries()], gs = entries.map(([, g]) => g);
+    if (gs.includes(5)) review++;
+    entries.forEach(([u, g]) => { const p = per.get(u); p.n++; p.dist[g]++; if (g <= 4) { p.sum += g; p.cnt04++; } });
+    if (gs.length < 2) return;
+    multi++;
+    const same = new Set(gs).size === 1; if (same) full++;
+    const num = gs.filter(g => g <= 4);
+    if (num.length >= 2) { within1N++; if (Math.max(...num) - Math.min(...num) <= 1) within1++; }
+    const md = modeOf(gs);
+    entries.forEach(([u, g]) => { const p = per.get(u); p.agreeN++; if (md.includes(g)) p.agree++; });
+    for (let i = 0; i < entries.length; i++) for (let j = i + 1; j < entries.length; j++) {
+      const k = pk(entries[i][0], entries[j][0]); const v = pair.get(k) || { n: 0, same: 0 };
+      v.n++; if (entries[i][1] === entries[j][1]) v.same++; pair.set(k, v);
+    }
+    if (!same) disagree.push({ im, entries, spread: num.length >= 2 ? Math.max(...num) - Math.min(...num) : 0, has5: gs.includes(5), batch: batchNames.get(im.batch_id) });
+  });
+  disagree.sort((a, b) => b.spread - a.spread || b.entries.length - a.entries.length);
+  return { images, ratings, raters, per, pair, pk, multi, full, within1, within1N, review, disagree,
+    gradedImgs: byImg.size, total: images.length };
+}
+
+const pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '–';
+function renderSummary() {
+  const d = sumData; if (!d) return;
+  const tile = (k, v, sub = '') => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div>${sub ? `<div class="k">${sub}</div>` : ''}</div>`;
+  $('#sumCards').innerHTML =
+    tile('Ảnh đã có người chấm', `${d.gradedImgs}<small>/${d.total}</small>`) +
+    tile('Người chấm', d.raters.length) +
+    tile('Lượt chấm', d.ratings.length) +
+    tile('Ảnh có ≥ 2 người chấm', d.multi) +
+    tile('Đồng thuận hoàn toàn', pct(d.full, d.multi), d.multi ? `${d.full}/${d.multi} ảnh mọi người cùng độ` : 'cần ≥ 2 người chấm cùng ảnh') +
+    tile('Lệch tối đa 1 độ', pct(d.within1, d.within1N), d.within1N ? `${d.within1}/${d.within1N} ảnh (không tính độ 5)` : '') +
+    tile('Ảnh có người chọn “Cân nhắc”', d.review);
+
+  // theo từng người chấm
+  const legend = GRADES.map(g => `<span class="lg"><i class="cg${g.g}"></i>${g.g} ${g.label}</span>`).join('');
+  $('#sumRaterLegend').innerHTML = legend;
+  $('#sumRaters').innerHTML = d.raters.length ? [...d.per.values()].sort((a, b) => b.n - a.n).map(p => {
+    const bar = p.dist.map((c, g) => c ? `<i class="cg${g}" style="flex:${c}" title="${esc(nameOfUser(p.u))} · Độ ${g} (${GRADES[g].label}): ${c} ảnh (${pct(c, p.n)})"></i>` : '').join('');
+    const counts = p.dist.map((c, g) => c ? `<span><i class="cg${g}"></i>${g}: <b>${c}</b></span>` : '').join('');
+    return `<tr><td class="uname">${esc(nameOfUser(p.u))}${p.u === state.user.id ? ' <span class="you">(bạn)</span>' : ''}</td>
+      <td class="num">${p.n}</td>
+      <td class="distcell"><div class="stack">${bar}</div><div class="dnum">${counts}</div></td>
+      <td class="num">${p.cnt04 ? (p.sum / p.cnt04).toFixed(2) : '–'}</td>
+      <td class="num">${p.agreeN ? pct(p.agree, p.agreeN) : '–'}<small>${p.agreeN ? ` (${p.agreeN})` : ''}</small></td></tr>`;
+  }).join('') : '<tr><td colspan="5" class="muted empty-row">Chưa có ai chấm trong phạm vi này</td></tr>';
+
+  // ma trận đồng thuận từng cặp
+  const R = d.raters;
+  if (R.length < 2) $('#sumMatrix').innerHTML = '<p class="muted empty-row">Cần ít nhất 2 người cùng chấm để so sánh.</p>';
+  else $('#sumMatrix').innerHTML = `<table class="matrix"><thead><tr><th></th>${R.map(u => `<th>${esc(nameOfUser(u))}</th>`).join('')}</tr></thead><tbody>${
+    R.map(a => `<tr><th>${esc(nameOfUser(a))}</th>${R.map(b => {
+      if (a === b) return '<td class="self">—</td>';
+      const v = d.pair.get(d.pk(a, b));
+      if (!v) return '<td class="na" title="Chưa chấm chung ảnh nào">·</td>';
+      const r = v.same / v.n;
+      return `<td style="--a:${(0.08 + r * 0.72).toFixed(2)}" class="${r >= 0.6 ? 'hi' : ''}" title="${esc(nameOfUser(a))} & ${esc(nameOfUser(b))}: cùng độ ${v.same}/${v.n} ảnh chung">${Math.round(r * 100)}%<small>${v.n}</small></td>`;
+    }).join('')}</tr>`).join('')}</tbody></table>`;
+
+  // ảnh chấm lệch nhau
+  const list = sumShowAll ? d.disagree : d.disagree.slice(0, 30);
+  $('#sumDisCount').textContent = d.disagree.length ? `${d.disagree.length} ảnh` : '';
+  $('#sumDis').innerHTML = d.disagree.length ? list.map(x => `
+    <div class="dis" data-b="${x.im.batch_id}" data-i="${x.im.id}">
+      <div class="dthumb"><img loading="lazy" data-path="${esc(x.im.storage_path)}" alt=""></div>
+      <div class="dinfo"><div class="dname">${esc(x.im.rel_path)}</div><div class="muted">${esc(x.batch || '')}</div>
+        <div class="dgrades">${x.entries.map(([u, g]) => `<span class="gchip" data-g="${g}" title="${esc(nameOfUser(u))}: ${GRADES[g].label}">${esc(nameOfUser(u))} <b>${g}</b></span>`).join('')}</div></div>
+      <div class="dspread"><b>${x.spread}</b><span>độ lệch</span></div>
+      <button class="btn outline sm">Mở ảnh</button>
+    </div>`).join('') + (d.disagree.length > list.length ? `<button class="btn outline sm more" id="sumMore">Xem thêm ${d.disagree.length - list.length} ảnh</button>` : '')
+    : '<p class="muted empty-row">Không có ảnh nào bị chấm khác nhau 🎉</p>';
+  $('#sumMore')?.addEventListener('click', () => { sumShowAll = true; renderSummary(); });
+  $('#sumDis').querySelectorAll('.dis').forEach(el => el.onclick = () => openImageFromSummary(Number(el.dataset.b), Number(el.dataset.i)));
+  // ảnh nhỏ
+  const imgs = [...$('#sumDis').querySelectorAll('img[data-path]')];
+  signUrls(imgs.map(i => ({ storage_path: i.dataset.path }))).then(() => imgs.forEach(i => { i.src = state.urls.get(i.dataset.path)?.url || ''; })).catch(() => {});
+}
+async function openImageFromSummary(batchId, imageId) {
+  if (!state.batches.some(b => b.id === batchId)) { state.scope = 'all'; localStorage.setItem('pg-scope', 'all'); renderScope(); await loadBatches(); }
+  await openBatch(batchId);
+  state.filter = 'all'; renderAll(); select(imageId);
+}
 
 // ---------- boot ----------
 if (sb) {

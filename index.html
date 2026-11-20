@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath d=%27M16 2C16 2 6 14 6 20a10 10 0 0 0 20 0C26 14 16 2 16 2z%27 fill=%27%23e9a93a%27/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="style.css?v=12" />
+  <link rel="stylesheet" href="style.css?v=14" />
 </head>
 <body>
   <!-- ========== AUTH ========== -->
@@ -46,6 +46,10 @@
   <section id="app" class="app hidden">
     <header class="topbar">
       <div class="brand"><span class="drop"></span>Plasma Grader</div>
+      <nav class="nav-tabs">
+        <button class="nav-tab active" data-view="grade">Chấm điểm</button>
+        <button class="nav-tab" data-view="summary">Tổng kết</button>
+      </nav>
       <div class="live" id="liveStatus" title="Trạng thái đồng bộ"><i></i><span>Đang kết nối…</span></div>
       <div class="user">
         <button class="btn admin-btn sm hidden" id="adminBtn">⚙ Quản trị</button>
@@ -100,6 +104,7 @@
               <span class="muted" id="batchMeta"></span>
             </div>
             <div class="ws-actions">
+              <label class="switch shared-sw" id="sharedBox" title="Lô chung: mọi tài khoản xem và chấm được; lô riêng: chỉ bạn"><input type="checkbox" id="batchShared" /><span></span> Lô chung</label>
               <button class="btn outline sm" id="addToBatch">+ Thêm ảnh vào lô</button>
               <button class="btn outline sm" id="exportBatch">Xuất CSV</button>
               <button class="btn danger-ghost sm" id="deleteBatch">Xoá lô</button>
@@ -177,6 +182,38 @@
             </div>
           </div>
         </div>
+        <section class="summary hidden" id="summaryPanel">
+          <div class="ws-head">
+            <div class="ws-title"><h2 class="admin-title">Tổng kết chấm điểm</h2>
+              <span class="muted">So sánh cách mọi người chấm trên cùng ảnh</span></div>
+            <div class="ws-actions">
+              <select id="sumBatch" class="sum-select"></select>
+              <button class="btn outline sm" id="sumRefresh">↻ Làm mới</button>
+              <button class="btn outline sm" id="sumExport">Xuất CSV</button>
+            </div>
+          </div>
+          <div id="sumBody">
+            <div class="cards" id="sumCards"></div>
+            <div class="panel">
+              <div class="panel-head"><h3>Theo người chấm</h3><div class="lgs" id="sumRaterLegend"></div></div>
+              <div class="table-wrap"><table class="users sum-raters">
+                <thead><tr><th>Người chấm</th><th class="num">Số ảnh</th><th>Phân bố độ</th><th class="num" title="Không tính độ 5">Độ trung bình</th><th class="num" title="Tỉ lệ chọn trùng với độ được chọn nhiều nhất trên các ảnh có ≥ 2 người chấm">Trùng đa số</th></tr></thead>
+                <tbody id="sumRaters"></tbody>
+              </table></div>
+            </div>
+            <div class="sum-grid">
+              <div class="panel">
+                <div class="panel-head"><h3>Đồng thuận từng cặp</h3><span class="muted">% ảnh chấm cùng độ · số nhỏ = số ảnh chung</span></div>
+                <div class="table-wrap" id="sumMatrix"></div>
+              </div>
+              <div class="panel">
+                <div class="panel-head"><h3>Ảnh bị chấm khác nhau</h3><span class="muted" id="sumDisCount"></span></div>
+                <div class="dis-list" id="sumDis"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="admin hidden" id="adminPanel">
           <div class="ws-head">
             <div class="ws-title"><h2 class="admin-title">Quản trị hệ thống</h2>
@@ -209,8 +246,8 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="config.js?v=12"></script>
-  <script src="seg.js?v=12"></script>
-  <script src="app.js?v=12"></script>
+  <script src="config.js?v=14"></script>
+  <script src="seg.js?v=14"></script>
+  <script src="app.js?v=14"></script>
 </body>
 </html>
