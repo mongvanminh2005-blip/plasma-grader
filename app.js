@@ -33,7 +33,8 @@ const USER_DOMAIN = 'users.plasma-grader.app';
 const toEmail = u => (u.includes('@') ? u : `${u}@${USER_DOMAIN}`).toLowerCase();
 const displayName = email => (email || '').endsWith('@' + USER_DOMAIN) ? email.split('@')[0] : (email || '');
 
-const state = { mode: 'login', user: null, batches: [], batchId: null, images: [], currentId: null, filter: 'all', channel: null, urls: new Map() };
+const state = { mode: 'login', user: null, batches: [], batchId: null, images: [], currentId: null, filter: 'all', channel: null, urls: new Map(),
+  isAdmin: false, scope: 'me', users: [], adminOpen: false };
 
 // ---------- helpers ----------
 let toastTimer;
@@ -115,6 +116,11 @@ async function startApp(user) {
   $('#auth').classList.add('hidden'); $('#app').classList.remove('hidden');
   const dn = displayName(user.email); $('#username').textContent = dn; $('#avatar').textContent = (dn || '?')[0];
   buildGradeButtons();
+  state.isAdmin = !!(await sb.rpc('is_admin')).data;
+  state.scope = state.isAdmin ? (localStorage.getItem('pg-scope') || 'me') : 'me';
+  $('#adminBtn').classList.toggle('hidden', !state.isAdmin);
+  $('#scopeBox').classList.toggle('hidden', !state.isAdmin);
+  if (state.isAdmin) await loadUsers().catch(() => {});
   connectLive();
   await loadBatches();
   const saved = Number(localStorage.getItem('batchId'));
@@ -129,7 +135,7 @@ function connectLive() {
   const refreshBatches = debounce(loadBatches, 400);
   const refreshCurrent = debounce(() => state.batchId && refreshImages(), 500);
   state.channel = sb.channel('pg-' + uid)
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'images', filter: `user_id=eq.${uid}` }, p => {
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'images', ...(state.isAdmin ? {} : { filter: `user_id=eq.${uid}` }) }, p => {
       const d = p.new, img = state.images.find(i => i.id === d.id);
       if (img && (img.grade !== d.grade || img.note !== d.note)) {
         Object.assign(img, { grade: d.grade, note: d.note, graded_at: d.graded_at });
@@ -138,7 +144,7 @@ function connectLive() {
       }
       refreshBatches();
     })
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'images', filter: `user_id=eq.${uid}` }, p => {
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'images', ...(state.isAdmin ? {} : { filter: `user_id=eq.${uid}` }) }, p => {
       if (p.new.batch_id === state.batchId && !state.images.some(i => i.id === p.new.id)) refreshCurrent();
       refreshBatches();
     })
@@ -163,7 +169,10 @@ function connectLive() {
 }
 
 async function loadBatches() {
-  state.batches = check(await sb.from('batch_stats').select('*').order('id', { ascending: false }));
+  let q = sb.from('batch_stats').select('*').order('id', { ascending: false });
+  if (state.scope === 'me') q = q.eq('user_id', state.user.id);
+  else if (state.scope !== 'all') q = q.eq('user_id', state.scope);
+  state.batches = check(await q);
   renderBatches();
 }
 function renderBatches() {
@@ -172,13 +181,13 @@ function renderBatches() {
   else ul.innerHTML = state.batches.map(b => {
     const pct = b.total ? Math.round(b.graded / b.total * 100) : 0;
     return `<li data-id="${b.id}" class="${b.id === state.batchId ? 'active' : ''}">
-      <div class="bn" title="${esc(b.name)}">${esc(b.name)}</div>
+      <div class="bn" title="${esc(b.name)}">${b.user_id !== state.user?.id ? `<span class="owner-tag">${esc(b.owner || '?')}</span>` : ''}${esc(b.name)}</div>
       <div class="bm"><span>${b.graded}/${b.total} ảnh · ${dateStr(b.created_at)}</span>
         ${pct === 100 && b.total ? '<span class="done">Xong</span>' : `<span>${pct}%</span>`}</div>
       <div class="bar"><i style="width:${pct}%"></i></div></li>`;
   }).join('');
   ul.querySelectorAll('li[data-id]').forEach(li => li.onclick = () => openBatch(Number(li.dataset.id)));
-  $('#emptyState').classList.toggle('hidden', !!state.batchId);
+  $('#emptyState').classList.toggle('hidden', !!state.batchId || state.adminOpen);
 }
 
 async function fetchImages(batchId) {
@@ -199,6 +208,7 @@ async function signUrls(imgs) {
 const urlOf = img => state.urls.get(img.storage_path)?.url || '';
 
 async function openBatch(id) {
+  closeAdmin();
   state.batchId = id; state.filter = 'all';
   localStorage.setItem('batchId', id);
   renderBatches();
@@ -233,7 +243,9 @@ function renderAll() {
   const b = batch(); if (!b) return;
   if (document.activeElement !== $('#batchName')) $('#batchName').value = b.name;
   const total = state.images.length, graded = state.images.filter(i => i.grade !== null).length;
-  $('#batchMeta').textContent = `${total} ảnh · tạo ngày ${dateStr(b.created_at)}`;
+  const other = b.user_id !== state.user.id;
+  $('#batchMeta').textContent = `${total} ảnh · tạo ngày ${dateStr(b.created_at)}` + (other ? ` · của tài khoản ${b.owner || '?'}` : '');
+  $('#addToBatch').classList.toggle('hidden', other);
   $('#progressText').textContent = `${graded}/${total}`;
   $('#progressBar').style.width = (total ? graded / total * 100 : 0) + '%';
 
@@ -403,16 +415,29 @@ $('#deleteBatch').onclick = async () => {
 };
 
 // ---------- export CSV ----------
-async function exportCsv(batchId) {
+// owner: undefined = theo phạm vi đang xem, 'all' = mọi tài khoản (quản trị)
+async function exportCsv(batchId, owner) {
   try {
+    const scope = owner || (state.isAdmin ? state.scope : 'me');
     const rows = await fetchAll(() => {
-      let q = sb.from('images').select('rel_path, filename, grade, note, graded_at, batch_id, batches(name)').order('batch_id').order('rel_path');
-      return batchId ? q.eq('batch_id', batchId) : q;
+      let q = sb.from('images').select('user_id, rel_path, filename, grade, note, graded_at, batch_id, batches(name)').order('batch_id').order('rel_path');
+      if (batchId) return q.eq('batch_id', batchId);
+      if (scope === 'me') return q.eq('user_id', state.user.id);
+      return scope === 'all' ? q : q.eq('user_id', scope);
     });
+    if (state.isAdmin && !state.users.length) await loadUsers().catch(() => {});
+    const nameOf = id => id === state.user.id ? displayName(state.user.email) : (state.users.find(u => u.id === id)?.username || id);
+    const labelOf = g => GRADES.find(x => x.g === g)?.label || '';
     const e = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const lines = [['Lô', 'Đường dẫn', 'Tên file', 'Độ', 'Ghi chú', 'Thời gian chấm'].map(e).join(',')];
-    rows.forEach(r => lines.push([r.batches?.name, r.rel_path, r.filename, r.grade, r.note,
-      r.graded_at ? new Date(r.graded_at).toLocaleString('vi-VN') : ''].map(e).join(',')));
+    const head = ['Lô', 'Đường dẫn', 'Tên file', 'Độ', 'Mức', 'Ghi chú', 'Thời gian chấm'];
+    if (state.isAdmin) head.unshift('Người tải');
+    const lines = [head.map(e).join(',')];
+    rows.forEach(r => {
+      const row = [r.batches?.name, r.rel_path, r.filename, r.grade, labelOf(r.grade), r.note,
+        r.graded_at ? new Date(r.graded_at).toLocaleString('vi-VN') : ''];
+      if (state.isAdmin) row.unshift(nameOf(r.user_id));
+      lines.push(row.map(e).join(','));
+    });
     const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -422,6 +447,115 @@ async function exportCsv(batchId) {
 }
 $('#exportAll').onclick = () => exportCsv(null);
 $('#exportBatch').onclick = () => exportCsv(state.batchId);
+
+
+// ---------- QUẢN TRỊ ----------
+const fmtBytes = b => b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : (b / 1024).toFixed(0) + ' KB';
+const FREE_STORAGE = 1024 ** 3, FREE_DB = 500 * 1024 ** 2;
+
+async function loadUsers() {
+  state.users = check(await sb.rpc('admin_list_users'));
+  renderScope();
+}
+function renderScope() {
+  const sel = $('#scopeSelect');
+  const others = state.users.filter(u => u.id !== state.user.id);
+  sel.innerHTML = `<option value="me">Của tôi</option><option value="all">Tất cả tài khoản</option>` +
+    others.map(u => `<option value="${u.id}">${esc(u.username)}</option>`).join('');
+  if (![...sel.options].some(o => o.value === state.scope)) state.scope = 'me';
+  sel.value = state.scope;
+}
+$('#scopeSelect').onchange = async e => {
+  state.scope = e.target.value;
+  localStorage.setItem('pg-scope', state.scope);
+  closeBatch(); await loadBatches();
+  if (!state.adminOpen && state.batches[0]) openBatch(state.batches[0].id);
+};
+function viewUserData(uid) {
+  state.scope = uid === state.user.id ? 'me' : uid;
+  localStorage.setItem('pg-scope', state.scope);
+  renderScope(); closeBatch();
+  loadBatches().then(() => state.batches[0] ? openBatch(state.batches[0].id) : (closeAdmin(), toast('Tài khoản này chưa có lô ảnh nào')));
+}
+
+function closeAdmin() {
+  state.adminOpen = false;
+  $('#adminPanel').classList.add('hidden'); $('#adminBtn').classList.remove('active');
+}
+async function openAdmin() {
+  state.adminOpen = true;
+  $('#adminBtn').classList.add('active');
+  $('#workspace').classList.add('hidden'); $('#emptyState').classList.add('hidden');
+  $('#adminPanel').classList.remove('hidden');
+  state.batchId = null; renderBatches();
+  await refreshAdmin();
+}
+$('#adminBtn').onclick = () => state.adminOpen ? (closeAdmin(), state.batches[0] ? openBatch(state.batches[0].id) : renderBatches()) : openAdmin();
+$('#adminRefresh').onclick = () => refreshAdmin();
+$('#adminExport').onclick = () => exportCsv(null, 'all');
+$('#adminDashboard').href = 'https://supabase.com/dashboard/project/' + (cfg.SUPABASE_URL || '').replace(/^https:\/\/|\.supabase\.co.*$/g, '');
+
+async function refreshAdmin() {
+  try {
+    const [ov] = await Promise.all([sb.rpc('admin_overview').then(check), loadUsers()]);
+    const sPct = Math.min(100, ov.storage_bytes / FREE_STORAGE * 100), dPct = Math.min(100, ov.db_bytes / FREE_DB * 100);
+    const card = (k, v, sub = '', pct = null) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div>
+      ${sub ? `<div class="k">${sub}</div>` : ''}${pct !== null ? `<div class="bar lg ${pct > 80 ? 'warn' : ''}"><i style="width:${pct}%"></i></div>` : ''}</div>`;
+    $('#adminCards').innerHTML =
+      card('Tài khoản', ov.users) + card('Lô ảnh', ov.batches) +
+      card('Ảnh đã tải', ov.images, `${ov.graded} đã chấm (${ov.images ? Math.round(ov.graded / ov.images * 100) : 0}%)`) +
+      card('Dung lượng ảnh', fmtBytes(ov.storage_bytes), `${sPct.toFixed(1)}% của 1 GB miễn phí`, sPct) +
+      card('Cơ sở dữ liệu', fmtBytes(ov.db_bytes), `${dPct.toFixed(1)}% của 500 MB miễn phí`, dPct);
+    renderUsers();
+  } catch (e) { toast(e.message); }
+}
+function renderUsers() {
+  $('#adminUserCount').textContent = state.users.length + ' tài khoản';
+  $('#adminUsers').innerHTML = state.users.map(u => {
+    const me = u.id === state.user.id;
+    return `<tr data-id="${u.id}">
+      <td><span class="uname">${esc(u.username)}</span>${u.is_admin ? '<span class="role">Quản trị</span>' : ''}${me ? '<span class="you">(bạn)</span>' : ''}</td>
+      <td>${dateStr(u.created_at)}</td>
+      <td>${u.last_sign_in_at ? new Date(u.last_sign_in_at).toLocaleString('vi-VN') : '<span class="muted">chưa đăng nhập</span>'}</td>
+      <td class="num">${u.batches}</td><td class="num">${u.images}</td><td class="num">${u.graded}</td>
+      <td class="num">${fmtBytes(u.storage_bytes)}</td>
+      <td><div class="actions">
+        <button class="btn outline" data-act="view">Xem dữ liệu</button>
+        <button class="btn outline" data-act="pass">Đặt lại mật khẩu</button>
+        ${me ? '' : `<button class="btn outline" data-act="role">${u.is_admin ? 'Bỏ quản trị' : 'Cấp quản trị'}</button>
+        <button class="btn danger-ghost" data-act="del">Xoá</button>`}
+      </div></td></tr>`;
+  }).join('');
+  $('#adminUsers').querySelectorAll('button[data-act]').forEach(b => b.onclick = () =>
+    adminAction(b.dataset.act, state.users.find(u => u.id === b.closest('tr').dataset.id)));
+}
+async function adminAction(act, u) {
+  try {
+    if (act === 'view') return viewUserData(u.id);
+    if (act === 'pass') {
+      const p = prompt(`Nhập mật khẩu mới cho "${u.username}" (tối thiểu 6 ký tự):`);
+      if (p === null) return;
+      if (p.length < 6) return toast('Mật khẩu tối thiểu 6 ký tự');
+      check(await sb.rpc('admin_set_password', { target: u.id, new_password: p }));
+      return toast(`Đã đổi mật khẩu cho ${u.username}`);
+    }
+    if (act === 'role') {
+      if (!confirm(u.is_admin ? `Bỏ quyền quản trị của "${u.username}"?` : `Cấp quyền quản trị cho "${u.username}"? Người này sẽ xem và sửa được toàn bộ dữ liệu.`)) return;
+      check(await sb.rpc('admin_set_admin', { target: u.id, make_admin: !u.is_admin }));
+      toast('Đã cập nhật quyền'); return refreshAdmin();
+    }
+    if (act === 'del') {
+      if (!confirm(`Xoá vĩnh viễn tài khoản "${u.username}" cùng ${u.batches} lô, ${u.images} ảnh và toàn bộ kết quả? Không thể hoàn tác.`)) return;
+      const imgs = await fetchAll(() => sb.from('images').select('storage_path').eq('user_id', u.id).order('id'));
+      const paths = imgs.map(i => i.storage_path);
+      for (let k = 0; k < paths.length; k += 100) check(await sb.storage.from(BUCKET).remove(paths.slice(k, k + 100)));
+      check(await sb.rpc('admin_delete_user', { target: u.id }));
+      if (state.scope === u.id) { state.scope = 'me'; localStorage.setItem('pg-scope', 'me'); }
+      toast(`Đã xoá tài khoản ${u.username}`);
+      await refreshAdmin(); await loadBatches();
+    }
+  } catch (e) { toast(e.message); }
+}
 
 // ---------- upload ----------
 let uploadTarget = null; // null = lô mới, số = thêm vào lô hiện tại
@@ -459,21 +593,93 @@ async function walk(entry, prefix, out) {
   }
 }
 
-const isImage = f => f.type.startsWith('image/') || /\.(jpe?g|png|gif|webp|bmp|tiff?|heic)$/i.test(f.name);
+const RAW_EXT = /\.(cr2|cr3|nef|nrw|arw|dng|orf|rw2|raf|pef|srw)$/i;
+const isImage = f => f.type.startsWith('image/') || RAW_EXT.test(f.name) || /\.(jpe?g|png|gif|webp|bmp|tiff?|heic)$/i.test(f.name);
+const extOf = f => (f.name.split('.').pop() || 'jpg').toLowerCase();
 
-// thu nhỏ ảnh để tiết kiệm dung lượng; nếu trình duyệt không đọc được định dạng thì giữ nguyên
+// ----- Đọc ảnh RAW (.cr2, .nef, .arw, .dng…): lấy ảnh JPEG mà máy ảnh nhúng sẵn trong file -----
+function rawPreviewCandidates(buf) {
+  const dv = new DataView(buf), size = buf.byteLength, out = [];
+  let orientation = 1;
+  const bo = size > 8 ? dv.getUint16(0) : 0;
+  if (bo === 0x4949 || bo === 0x4d4d) {               // file dạng TIFF (CR2, NEF, ARW, DNG, ORF, PEF…)
+    const le = bo === 0x4949, u16 = o => dv.getUint16(o, le), u32 = o => dv.getUint32(o, le);
+    const seen = new Set();
+    const readIfd = (off, depth, first) => {
+      if (!off || off + 2 > size || seen.has(off) || depth > 4) return 0;
+      seen.add(off);
+      const n = u16(off), t = {};
+      for (let i = 0; i < n; i++) {
+        const e = off + 2 + i * 12; if (e + 12 > size) break;
+        const tag = u16(e), type = u16(e + 2), cnt = u32(e + 4);
+        t[tag] = { cnt, val: type === 3 && cnt === 1 ? u16(e + 8) : u32(e + 8) };
+      }
+      if (first && t[0x112]) orientation = t[0x112].val || 1;
+      if (t[0x201] && t[0x202]) out.push([t[0x201].val, t[0x202].val]);
+      if (t[0x111] && t[0x117] && t[0x111].cnt === 1) out.push([t[0x111].val, t[0x117].val]);
+      if (t[0x14a]) { const c = t[0x14a]; if (c.cnt === 1) readIfd(c.val, depth + 1); else for (let k = 0; k < c.cnt && c.val + k * 4 + 4 <= size; k++) readIfd(u32(c.val + k * 4), depth + 1); }
+      if (t[0x8769]) readIfd(t[0x8769].val, depth + 1);
+      const nx = off + 2 + n * 12; return nx + 4 <= size ? u32(nx) : 0;
+    };
+    try { if (u16(2) === 42) { let next = u32(4), i = 0; while (next && i < 8) next = readIfd(next, 0, i++ === 0); } } catch { /* file lỗi */ }
+  }
+  const okJpeg = ([o, l]) => l > 1000 && o + l <= size && dv.getUint16(o) === 0xffd8;
+  let cands = out.filter(okJpeg).map(([o, l]) => ({ o, l }));
+  if (!cands.length) {                                 // định dạng khác (CR3, RAF…): dò các ảnh JPEG nằm trong file
+    const b = new Uint8Array(buf);
+    for (let i = 0; i < size - 3 && cands.length < 12; i++)
+      if (b[i] === 0xff && b[i + 1] === 0xd8 && b[i + 2] === 0xff) { cands.push({ o: i, l: size - i }); i += 1024; }
+  }
+  cands.sort((a, b) => b.l - a.l);
+  return { cands, orientation };
+}
+
+async function decodeRaw(file) {
+  const buf = await file.arrayBuffer();
+  const { cands, orientation } = rawPreviewCandidates(buf);
+  let best = null;
+  for (const c of cands) {
+    try {
+      const bmp = await createImageBitmap(new Blob([buf.slice(c.o, c.o + c.l)], { type: 'image/jpeg' }));
+      if (!best || bmp.width * bmp.height > best.width * best.height) { best?.close(); best = bmp; } else bmp.close();
+      if (best.width >= 2000 && cands.length > 3) break;
+    } catch { /* không giải mã được (ví dụ dữ liệu RAW thô), thử ứng viên tiếp theo */ }
+  }
+  if (!best) throw new Error('Không đọc được ảnh xem trước trong file ' + file.name);
+  return { bmp: best, orientation };
+}
+
+function drawToJpeg(bmp, orientation, maxSide, quality) {
+  const rot = orientation === 6 || orientation === 8;
+  const w0 = bmp.width, h0 = bmp.height;
+  const scale = Math.min(1, maxSide / Math.max(w0, h0));
+  const w = Math.round(w0 * scale), h = Math.round(h0 * scale);
+  const c = document.createElement('canvas');
+  c.width = rot ? h : w; c.height = rot ? w : h;
+  const ctx = c.getContext('2d');
+  if (orientation === 3) { ctx.translate(w, h); ctx.rotate(Math.PI); }
+  else if (orientation === 6) { ctx.translate(h, 0); ctx.rotate(Math.PI / 2); }
+  else if (orientation === 8) { ctx.translate(0, w); ctx.rotate(-Math.PI / 2); }
+  ctx.drawImage(bmp, 0, 0, w, h);
+  return new Promise(r => c.toBlob(r, 'image/jpeg', quality));
+}
+
+// chuẩn bị ảnh trước khi tải: RAW → JPEG; ảnh thường thì thu nhỏ nếu bật "Nén ảnh"
 async function prepare(file) {
-  if (!$('#compress').checked || !/^image\/(jpeg|png|webp|bmp)$/.test(file.type)) return { blob: file, ext: (file.name.split('.').pop() || 'jpg').toLowerCase() };
+  const compress = $('#compress').checked;
+  if (RAW_EXT.test(file.name)) {
+    const { bmp, orientation } = await decodeRaw(file);
+    const blob = await drawToJpeg(bmp, orientation, compress ? MAX_SIDE : 4000, compress ? JPEG_QUALITY : 0.93);
+    bmp.close();
+    return { blob, ext: 'jpg' };
+  }
+  if (!compress || !/^image\/(jpeg|png|webp|bmp)$/.test(file.type)) return { blob: file, ext: extOf(file) };
   try {
     const bmp = await createImageBitmap(file);
-    const scale = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
-    if (scale === 1 && file.size < 600 * 1024) { bmp.close(); return { blob: file, ext: (file.name.split('.').pop() || 'jpg').toLowerCase() }; }
-    const c = document.createElement('canvas');
-    c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
-    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height); bmp.close();
-    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', JPEG_QUALITY));
-    return blob && blob.size < file.size ? { blob, ext: 'jpg' } : { blob: file, ext: (file.name.split('.').pop() || 'jpg').toLowerCase() };
-  } catch { return { blob: file, ext: (file.name.split('.').pop() || 'jpg').toLowerCase() }; }
+    if (Math.max(bmp.width, bmp.height) <= MAX_SIDE && file.size < 600 * 1024) { bmp.close(); return { blob: file, ext: extOf(file) }; }
+    const blob = await drawToJpeg(bmp, 1, MAX_SIDE, JPEG_QUALITY); bmp.close();
+    return blob && blob.size < file.size ? { blob, ext: 'jpg' } : { blob: file, ext: extOf(file) };
+  } catch { return { blob: file, ext: extOf(file) }; }
 }
 
 async function handleFiles(list) {
@@ -516,7 +722,8 @@ async function handleFiles(list) {
         setP(done, `Đang tải ${done}/${list.length} ảnh…`);
       }
     };
-    await Promise.all(Array.from({ length: PARALLEL }, worker));
+    const hasRaw = list.some(x => RAW_EXT.test(x.file.name));
+    await Promise.all(Array.from({ length: hasRaw ? 2 : PARALLEL }, worker));
     await flush(true);
     setP(list.length, failed ? `Xong – ${failed} ảnh lỗi` : 'Hoàn tất');
     toast(failed ? `Đã tải ${list.length - failed} ảnh, ${failed} ảnh lỗi` : `Đã tải lên ${list.length} ảnh`);
@@ -532,7 +739,7 @@ if (sb) {
     // tránh gọi API Supabase trực tiếp trong callback (theo khuyến nghị của supabase-js)
     setTimeout(() => {
       if (session?.user) startApp(session.user);
-      else { state.user = null; closeBatch(); setMode('login'); showAuth(); }
+      else { closeAdmin(); closeBatch(); state.batches = []; state.users = []; state.isAdmin = false; state.user = null; renderBatches(); setMode('login'); showAuth(); }
     }, 0);
   });
 }

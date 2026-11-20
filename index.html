@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath d=%27M16 2C16 2 6 14 6 20a10 10 0 0 0 20 0C26 14 16 2 16 2z%27 fill=%27%23e9a93a%27/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="style.css?v=4" />
+  <link rel="stylesheet" href="style.css?v=6" />
 </head>
 <body>
   <!-- ========== AUTH ========== -->
@@ -48,6 +48,7 @@
       <div class="brand"><span class="drop"></span>Plasma Grader</div>
       <div class="live" id="liveStatus" title="Trạng thái đồng bộ"><i></i><span>Đang kết nối…</span></div>
       <div class="user">
+        <button class="btn admin-btn sm hidden" id="adminBtn">⚙ Quản trị</button>
         <span class="avatar" id="avatar"></span>
         <span id="username"></span>
         <button class="btn ghost sm" id="logoutBtn">Đăng xuất</button>
@@ -58,12 +59,12 @@
       <aside class="sidebar">
         <div class="upload-box" id="dropZone">
           <div class="upload-icon">⬆</div>
-          <p><b>Kéo thả ảnh hoặc thư mục</b><br />vào đây</p>
+          <p><b>Kéo thả ảnh hoặc thư mục</b><br />vào đây · hỗ trợ JPG, PNG, CR2…</p>
           <div class="upload-actions">
             <button class="btn primary sm" id="pickFiles">Chọn ảnh</button>
             <button class="btn outline sm" id="pickFolder">Chọn thư mục</button>
           </div>
-          <input type="file" id="fileInput" accept="image/*" multiple hidden />
+          <input type="file" id="fileInput" accept="image/*,.cr2,.cr3,.nef,.nrw,.arw,.dng,.orf,.rw2,.raf,.pef,.srw" multiple hidden />
           <input type="file" id="folderInput" webkitdirectory directory multiple hidden />
           <label class="switch small" title="Thu nhỏ ảnh về tối đa 1600px trước khi tải để tiết kiệm dung lượng miễn phí (1 GB)"><input type="checkbox" id="compress" checked /><span></span> Nén ảnh khi tải lên</label>
         </div>
@@ -72,6 +73,9 @@
           <div class="bar"><i id="uploadBar"></i></div>
         </div>
 
+        <label class="scope hidden" id="scopeBox">Hiển thị lô của
+          <select id="scopeSelect"></select>
+        </label>
         <div class="side-head">
           <h3>Lô ảnh</h3>
           <button class="link" id="exportAll">Xuất tất cả CSV</button>
@@ -138,6 +142,25 @@
             </div>
           </div>
         </div>
+        <section class="admin hidden" id="adminPanel">
+          <div class="ws-head">
+            <div class="ws-title"><h2 class="admin-title">Quản trị hệ thống</h2>
+              <span class="muted">Quản lý tài khoản, dữ liệu tải lên và dung lượng</span></div>
+            <div class="ws-actions">
+              <button class="btn outline sm" id="adminRefresh">↻ Làm mới</button>
+              <button class="btn outline sm" id="adminExport">Xuất CSV toàn bộ</button>
+              <a class="btn outline sm" id="adminDashboard" target="_blank" rel="noopener">Mở Supabase ↗</a>
+            </div>
+          </div>
+          <div class="cards" id="adminCards"></div>
+          <div class="panel">
+            <div class="panel-head"><h3>Tài khoản</h3><span class="muted" id="adminUserCount"></span></div>
+            <div class="table-wrap"><table class="users">
+              <thead><tr><th>Tên đăng nhập</th><th>Ngày tạo</th><th>Đăng nhập gần nhất</th><th class="num">Lô</th><th class="num">Ảnh</th><th class="num">Đã chấm</th><th class="num">Dung lượng</th><th>Thao tác</th></tr></thead>
+              <tbody id="adminUsers"></tbody>
+            </table></div>
+          </div>
+        </section>
       </main>
     </div>
   </section>
@@ -151,7 +174,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="config.js?v=4"></script>
-  <script src="app.js?v=4"></script>
+  <script src="config.js?v=6"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>
