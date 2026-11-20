@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath d=%27M16 2C16 2 6 14 6 20a10 10 0 0 0 20 0C26 14 16 2 16 2z%27 fill=%27%23e9a93a%27/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="style.css?v=20" />
+  <link rel="stylesheet" href="style.css?v=21" />
 </head>
 <body>
   <!-- ========== AUTH ========== -->
@@ -30,7 +30,7 @@
       </div>
       <form id="authForm" autocomplete="on">
         <label>Tên đăng nhập
-          <input name="username" required minlength="3" maxlength="32" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="vd: minh.bme4" />
+          <input name="username" required minlength="3" maxlength="32" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="vd: moimoi.bme4" />
         </label>
         <label>Mật khẩu
           <input name="password" type="password" required maxlength="72" autocomplete="current-password" placeholder="Mật khẩu" />
@@ -234,13 +234,19 @@
             <div class="panel">
               <div class="panel-head"><h3>Theo người phân loại</h3><div class="lgs" id="sumRaterLegend"></div></div>
               <div class="table-wrap"><table class="users sum-raters">
-                <thead><tr><th>Người phân loại</th><th class="num">Số ảnh</th><th>Phân bố độ</th></tr></thead>
+                <thead><tr><th>Người phân loại</th><th class="num">Số ảnh</th><th>Phân bố độ</th><th class="num" title="Không tính độ 5">Độ trung bình</th><th class="num" title="Tỉ lệ chọn trùng với độ được chọn nhiều nhất trên các ảnh có ≥ 2 người phân loại">Trùng đa số</th></tr></thead>
                 <tbody id="sumRaters"></tbody>
               </table></div>
             </div>
-            <div class="panel">
-              <div class="panel-head"><h3>Ảnh được phân loại khác nhau</h3><span class="muted" id="sumDisCount"></span></div>
-              <div class="dis-list" id="sumDis"></div>
+            <div class="sum-grid">
+              <div class="panel">
+                <div class="panel-head"><h3>Đồng thuận từng cặp</h3><span class="muted">% ảnh phân loại cùng độ · số nhỏ = số ảnh chung</span></div>
+                <div class="table-wrap" id="sumMatrix"></div>
+              </div>
+              <div class="panel">
+                <div class="panel-head"><h3>Ảnh được phân loại khác nhau</h3><span class="muted" id="sumDisCount"></span></div>
+                <div class="dis-list" id="sumDis"></div>
+              </div>
             </div>
           </div>
         </section>
@@ -301,8 +307,8 @@
   </div>
 
   <script src="vendor/supabase.js?v=2.119.2" integrity="sha384-A97u3Qnt9GZHURO9YJZRe7VQgGUeFzcv6I1oIGnUTxQrCxnpQMwR0/G8F2zt9abZ"></script>
-  <script src="config.js?v=20"></script>
-  <script src="seg.js?v=20"></script>
-  <script src="app.js?v=20"></script>
+  <script src="config.js?v=21"></script>
+  <script src="seg.js?v=21"></script>
+  <script src="app.js?v=21"></script>
 </body>
 </html>

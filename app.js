@@ -1432,9 +1432,12 @@ function renderSummary() {
   const d = sumData; if (!d) return;
   const tile = (k, v, sub = '') => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div>${sub ? `<div class="k">${sub}</div>` : ''}</div>`;
   $('#sumCards').innerHTML =
-    tile('Ảnh đã phân loại', `${d.gradedImgs}<small>/${d.total}</small>`) +
+    tile('Ảnh đã có người phân loại', `${d.gradedImgs}<small>/${d.total}</small>`) +
     tile('Người phân loại', d.raters.length) +
-    tile('Mức đồng thuận', pct(d.full, d.multi), d.multi ? `${d.full}/${d.multi} ảnh mọi người chọn cùng độ` : 'cần ≥ 2 người cùng phân loại một ảnh') +
+    tile('Lượt phân loại', d.ratings.length) +
+    tile('Ảnh có ≥ 2 người phân loại', d.multi) +
+    tile('Đồng thuận hoàn toàn', pct(d.full, d.multi), d.multi ? `${d.full}/${d.multi} ảnh mọi người cùng độ` : 'cần ≥ 2 người phân loại cùng ảnh') +
+    tile('Lệch tối đa 1 độ', pct(d.within1, d.within1N), d.within1N ? `${d.within1}/${d.within1N} ảnh (không tính độ 5)` : '') +
     tile('Ảnh có người chọn “Cân nhắc”', d.review);
 
   // theo từng người phân loại
@@ -1444,8 +1447,22 @@ function renderSummary() {
     const counts = p.dist.map((c, g) => c ? `<span><i class="cg${g}"></i>${g}: <b>${c}</b></span>` : '').join('');
     return `<tr><td class="uname">${esc(nameOfUser(p.u))}${p.u === state.user.id ? ' <span class="you">(bạn)</span>' : ''}</td>
       <td class="num">${p.n}</td>
-      <td class="distcell"><div class="stack">${bar}</div><div class="dnum">${counts}</div></td></tr>`;
-  }).join('') : '<tr><td colspan="3" class="muted empty-row">Chưa có ai phân loại trong phạm vi này</td></tr>';
+      <td class="distcell"><div class="stack">${bar}</div><div class="dnum">${counts}</div></td>
+      <td class="num">${p.cnt04 ? (p.sum / p.cnt04).toFixed(2) : '–'}</td>
+      <td class="num">${p.agreeN ? pct(p.agree, p.agreeN) : '–'}<small>${p.agreeN ? ` (${p.agreeN})` : ''}</small></td></tr>`;
+  }).join('') : '<tr><td colspan="5" class="muted empty-row">Chưa có ai phân loại trong phạm vi này</td></tr>';
+
+  // đồng thuận từng cặp
+  const R = d.raters;
+  if (R.length < 2) $('#sumMatrix').innerHTML = '<p class="muted empty-row">Cần ít nhất 2 người cùng phân loại để so sánh.</p>';
+  else $('#sumMatrix').innerHTML = `<table class="matrix"><thead><tr><th></th>${R.map(u => `<th>${esc(nameOfUser(u))}</th>`).join('')}</tr></thead><tbody>${
+    R.map(a => `<tr><th>${esc(nameOfUser(a))}</th>${R.map(b => {
+      if (a === b) return '<td class="self">—</td>';
+      const v = d.pair.get(d.pk(a, b));
+      if (!v) return '<td class="na" title="Chưa phân loại chung ảnh nào">·</td>';
+      const r = v.same / v.n;
+      return `<td style="--a:${(0.08 + r * 0.72).toFixed(2)}" class="${r >= 0.6 ? 'hi' : ''}" title="${esc(nameOfUser(a))} & ${esc(nameOfUser(b))}: cùng độ ${v.same}/${v.n} ảnh chung">${Math.round(r * 100)}%<small>${v.n}</small></td>`;
+    }).join('')}</tr>`).join('')}</tbody></table>`;
 
   // ảnh được phân loại khác nhau
   const list = sumShowAll ? d.disagree : d.disagree.slice(0, 30);

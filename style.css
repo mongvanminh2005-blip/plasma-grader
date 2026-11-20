@@ -462,6 +462,3 @@ table.matrix td.self, table.matrix td.na { background: #f3f5f7; color: var(--mut
 .backup-body p { margin: 0; }
 .muted.small { font-size: 12px; }
 
-
-#sumCards { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-@media (max-width: 900px) { #sumCards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

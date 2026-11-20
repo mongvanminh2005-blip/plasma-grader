@@ -42,4 +42,4 @@ Row Level Security trong `setup.sql` (mỗi tài khoản chỉ đọc/sửa dữ
 ## Thùng rác, sao lưu, chỉ số đồng thuận
 - Xoá ảnh / lô chỉ chuyển vào **Thùng rác** (thanh bên), khôi phục được trong 30 ngày; quá hạn website tự xoá hẳn. Xem `trash.sql`.
 - **Quản trị → Sao lưu**: tải ZIP gồm `data.json` (toàn bộ dữ liệu), `ket-qua.csv`, và tuỳ chọn toàn bộ ảnh.
-- **Tổng kết**: số ảnh đã phân loại, số người phân loại, mức đồng thuận, phân bố độ theo từng người, danh sách ảnh được phân loại khác nhau.
+- **Tổng kết**: số ảnh / người / lượt phân loại, đồng thuận hoàn toàn, lệch tối đa 1 độ, phân bố độ – độ trung bình – trùng đa số theo từng người, đồng thuận từng cặp, danh sách ảnh được phân loại khác nhau.
