@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath d=%27M16 2C16 2 6 14 6 20a10 10 0 0 0 20 0C26 14 16 2 16 2z%27 fill=%27%23e9a93a%27/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="style.css?v=7" />
+  <link rel="stylesheet" href="style.css?v=9" />
 </head>
 <body>
   <!-- ========== AUTH ========== -->
@@ -118,7 +118,10 @@
           <div class="ws-body">
             <div class="viewer">
               <div class="stage" id="stage">
-                <img id="mainImg" alt="" />
+                <div class="zoomer" id="zoomer">
+                  <img id="mainImg" alt="" />
+                  <svg id="overlay" class="overlay" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet"></svg>
+                </div>
                 <button class="nav prev" id="prevBtn" title="Ảnh trước (←)">‹</button>
                 <button class="nav next" id="nextBtn" title="Ảnh sau (→)">›</button>
                 <span class="counter" id="counter"></span>
@@ -129,11 +132,32 @@
                 <div class="save-state" id="saveState"></div>
               </div>
 
+              <div class="seg-bar" id="segBar">
+                <div class="seg-legend" id="segLegend"></div>
+                <div class="seg-actions">
+                  <span class="seg-status" id="segStatus"></span>
+                  <button class="btn outline sm" id="segZoom" title="Phóng to vào ống nghiệm (phím Z)">🔍 Phóng to ống</button>
+                  <button class="btn outline sm" id="segRun" title="Chạy AI khoanh vùng cho ảnh này">✦ Khoanh vùng AI</button>
+                  <button class="btn outline sm" id="segEdit" title="Kéo điểm, xoá hoặc vẽ thêm vùng">✎ Chỉnh sửa</button>
+                  <button class="btn outline sm" id="segBatch" title="Khoanh các ảnh chưa có vùng trong lô">Khoanh cả lô</button>
+                </div>
+              </div>
+              <div class="seg-editbar hidden" id="segEditBar">
+                <span>Kéo các điểm để chỉnh · bấm vào vùng để chọn · <b>Delete</b> để xoá vùng · <b>Esc</b> để thoát</span>
+                <span class="seg-edit-actions">
+                  <select id="segNewCls"></select>
+                  <button class="btn outline sm" id="segDraw">+ Vẽ vùng mới</button>
+                  <button class="btn danger-ghost sm" id="segDel">Xoá vùng đã chọn</button>
+                  <button class="btn primary sm" id="segDone">Xong</button>
+                </span>
+              </div>
+
               <div class="grade-panel">
                 <div class="gp-label">Chọn độ <span class="muted">— phím tắt 0–4</span></div>
                 <div class="grades" id="grades"></div>
                 <div class="gp-foot">
-                  <label class="switch"><input type="checkbox" id="autoNext" checked /><span></span> Tự chuyển ảnh tiếp theo</label>
+                  <span class="gp-switches"><label class="switch"><input type="checkbox" id="autoNext" checked /><span></span> Tự chuyển ảnh tiếp theo</label>
+                  <label class="switch" title="Tự chạy AI khoanh vùng khi mở ảnh chưa có vùng"><input type="checkbox" id="autoSeg" checked /><span></span> Tự khoanh vùng AI</label></span>
                   <button class="link" id="clearGrade">Bỏ chọn độ</button>
                 </div>
                 <textarea id="note" rows="2" placeholder="Ghi chú (tự lưu)…"></textarea>
@@ -178,7 +202,8 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="config.js?v=7"></script>
-  <script src="app.js?v=7"></script>
+  <script src="config.js?v=9"></script>
+  <script src="seg.js?v=9"></script>
+  <script src="app.js?v=9"></script>
 </body>
 </html>

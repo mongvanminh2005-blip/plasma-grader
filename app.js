@@ -138,8 +138,11 @@ function connectLive() {
   state.channel = sb.channel('pg-' + uid)
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'images', ...(state.isAdmin ? {} : { filter: `user_id=eq.${uid}` }) }, p => {
       const d = p.new, img = state.images.find(i => i.id === d.id);
-      if (img && (img.grade !== d.grade || img.note !== d.note)) {
+      const editingThis = seg.editing && d.id === state.currentId;
+      const regChanged = img && !editingThis && JSON.stringify(img.regions ?? null) !== JSON.stringify(d.regions ?? null);
+      if (img && (img.grade !== d.grade || img.note !== d.note || regChanged)) {
         Object.assign(img, { grade: d.grade, note: d.note, graded_at: d.graded_at });
+        if (regChanged) Object.assign(img, { regions: d.regions, regions_source: d.regions_source, regions_at: d.regions_at });
         renderAll();
         if (d.id === state.currentId) { showCurrent(); }
       }
@@ -193,7 +196,7 @@ function renderBatches() {
 
 async function fetchImages(batchId) {
   const imgs = await fetchAll(() => sb.from('images')
-    .select('id, batch_id, filename, rel_path, storage_path, grade, note, graded_at')
+    .select('id, batch_id, filename, rel_path, storage_path, grade, note, graded_at, regions, regions_source, regions_at')
     .eq('batch_id', batchId).order('rel_path').order('id'));
   await signUrls(imgs);
   return imgs;
@@ -300,6 +303,10 @@ function showCurrent() {
   if (document.activeElement !== $('#note')) $('#note').value = img.note || '';
   setSave(img.graded_at ? 'ok' : '', img.graded_at ? 'Đã lưu lúc ' + timeStr(img.graded_at) : 'Chưa chấm');
   renderGradeSelection();
+  if (seg.shownId !== img.id) { seg.shownId = img.id; seg.sel = -1; seg.drawing = null; updateDrawBtn(); }
+  renderOverlay();
+  if (!seg.busy.has(img.id)) setSeg('', segSummary(img));
+  maybeAutoSeg();
 }
 
 function select(id) {
@@ -392,6 +399,8 @@ document.addEventListener('keydown', e => {
     if (e.key === 'Escape') document.activeElement.blur();
     return;
   }
+  if (seg.editing && handleSegKey(e)) return;
+  if ((e.key === 'z' || e.key === 'Z') && !e.ctrlKey && !e.metaKey) return $('#segZoom').click();
   if (e.key === 'Escape') return $('#lightbox').classList.add('hidden');
   if (GRADES.some(x => String(x.g) === e.key)) { e.preventDefault(); setGrade(Number(e.key)); }
   else if (e.key === 'ArrowRight') step(1);
@@ -424,7 +433,7 @@ async function exportCsv(batchId, owner) {
   try {
     const scope = owner || (state.isAdmin ? state.scope : 'me');
     const rows = await fetchAll(() => {
-      let q = sb.from('images').select('user_id, rel_path, filename, grade, note, graded_at, batch_id, batches(name)').order('batch_id').order('rel_path');
+      let q = sb.from('images').select('user_id, rel_path, filename, grade, note, graded_at, regions, regions_source, batch_id, batches(name)').order('batch_id').order('rel_path');
       if (batchId) return q.eq('batch_id', batchId);
       if (scope === 'me') return q.eq('user_id', state.user.id);
       return scope === 'all' ? q : q.eq('user_id', scope);
@@ -433,12 +442,13 @@ async function exportCsv(batchId, owner) {
     const nameOf = id => id === state.user.id ? displayName(state.user.email) : (state.users.find(u => u.id === id)?.username || id);
     const labelOf = g => GRADES.find(x => x.g === g)?.label || '';
     const e = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const head = ['Lô', 'Đường dẫn', 'Tên file', 'Độ', 'Mức', 'Ghi chú', 'Thời gian chấm'];
+    const head = ['Lô', 'Đường dẫn', 'Tên file', 'Độ', 'Mức', 'Ghi chú', 'Thời gian chấm', 'Khoanh vùng', 'Số vùng', 'Plasma / (plasma + hồng cầu) theo chiều cao (%)'];
     if (state.isAdmin) head.unshift('Người tải');
     const lines = [head.map(e).join(',')];
     rows.forEach(r => {
       const row = [r.batches?.name, r.rel_path, r.filename, r.grade, labelOf(r.grade), r.note,
-        r.graded_at ? new Date(r.graded_at).toLocaleString('vi-VN') : ''];
+        r.graded_at ? new Date(r.graded_at).toLocaleString('vi-VN') : '',
+        r.regions ? (r.regions_source === 'manual' ? 'Chỉnh tay' : 'AI') : '', r.regions ? r.regions.length : '', plasmaRatio(r.regions)];
       if (state.isAdmin) row.unshift(nameOf(r.user_id));
       lines.push(row.map(e).join(','));
     });
@@ -778,6 +788,255 @@ $('#rawConvert').onclick = async () => {
   toast(failed ? `Đã chuyển ${raws.length - failed} ảnh, ${failed} ảnh lỗi` : `Đã chuyển ${raws.length} ảnh RAW sang JPEG`);
   await refreshImages(); loadBatches();
 };
+
+
+// ---------- KHOANH VÙNG: AI + chỉnh tay ----------
+const REGION_CLASSES = [
+  { name: 'cap', label: 'Nắp', hex: '#2563eb' },
+  { name: 'Headspace', label: 'Headspace', hex: '#0ea5e9' },
+  { name: 'plasma', label: 'Plasma', hex: '#eab308' },
+  { name: 'bloodcell', label: 'Hồng cầu', hex: '#dc2626' },
+];
+const regClass = r => REGION_CLASSES.find(c => c.name === r.name) || { label: r.name, hex: '#a855f7' };
+const seg = { hidden: new Set(JSON.parse(localStorage.getItem('pg-seg-hidden') || '[]')), editing: false, drawing: null, sel: -1, busy: new Set(), drag: null, shownId: null };
+const ORT_URL = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/ort.wasm.min.js';
+let ortLoading = null;
+const loadOrt = () => window.ort ? Promise.resolve() : (ortLoading ||= new Promise((res, rej) => {
+  const sc = document.createElement('script'); sc.src = ORT_URL; sc.onload = res;
+  sc.onerror = () => { ortLoading = null; rej(new Error('Không tải được thư viện AI')); };
+  document.head.appendChild(sc);
+}));
+async function ensureModel() {
+  await loadOrt();
+  if (!TubeSeg.ready) await TubeSeg.load(p => setSeg('busy', `Đang tải mô hình AI… ${Math.round(p * 100)}%`));
+}
+function setSeg(cls, text) { const el = $('#segStatus'); el.className = 'seg-status ' + (cls || ''); el.textContent = text || ''; }
+const segSummary = img => !img.regions ? (RAW_EXT.test(img.storage_path) ? '' : 'Chưa khoanh vùng')
+  : img.regions.length ? `${img.regions.length} vùng · ${img.regions_source === 'manual' ? 'đã chỉnh tay' : 'AI khoanh'}` : 'Không có vùng';
+const bboxOf = pts => {
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+};
+// tỉ lệ chiều cao plasma so với plasma + hồng cầu (dùng khung bao)
+function plasmaRatio(regions) {
+  const h = n => { const r = (regions || []).filter(x => x.name === n).map(x => bboxOf(x.pts)); return r.length ? Math.max(...r.map(b => b[3] - b[1])) : 0; };
+  const p = h('plasma'), c = h('bloodcell');
+  return p && c ? Math.round(p / (p + c) * 1000) / 10 : '';
+}
+
+const autoSegBox = $('#autoSeg');
+autoSegBox.checked = localStorage.getItem('pg-autoseg') !== '0';
+autoSegBox.onchange = () => { localStorage.setItem('pg-autoseg', autoSegBox.checked ? '1' : '0'); if (autoSegBox.checked) maybeAutoSeg(); };
+
+async function segmentImage(img) {
+  if (seg.busy.has(img.id)) return null;
+  seg.busy.add(img.id);
+  try {
+    await ensureModel();
+    if (img.id === state.currentId) setSeg('busy', 'AI đang khoanh vùng…');
+    await signUrls([img]);
+    const res = await fetch(urlOf(img));
+    if (!res.ok) throw new Error('Không tải được ảnh');
+    const bmp = await createImageBitmap(await res.blob());
+    const regions = await TubeSeg.run(bmp); bmp.close();
+    await saveRegions(img, regions, 'ai');
+    return regions;
+  } finally { seg.busy.delete(img.id); }
+}
+async function saveRegions(img, regions, source) {
+  img.regions = regions; img.regions_source = source; img.regions_at = new Date().toISOString();
+  if (img.id === state.currentId) { renderOverlay(); setSeg('busy', 'Đang lưu vùng…'); }
+  check(await sb.from('images').update({ regions, regions_source: source, regions_at: img.regions_at }).eq('id', img.id));
+  if (img.id === state.currentId) setSeg('', segSummary(img));
+}
+const saveManualSoon = debounce(img => saveRegions(img, img.regions, 'manual').catch(e => setSeg('', '⚠ ' + e.message)), 500);
+function markManual(img, i) {
+  const r = img.regions[i]; if (r) { r.src = 'manual'; r.box = bboxOf(r.pts); }
+  img.regions_source = 'manual'; renderOverlay(); saveManualSoon(img);
+}
+
+async function runCurrent(force) {
+  const img = current(); if (!img) return;
+  if (RAW_EXT.test(img.storage_path)) return toast('Ảnh còn ở dạng RAW – hãy chuyển sang JPEG trước');
+  if (force && img.regions_source === 'manual' && !confirm('Ảnh này đã được chỉnh tay. Chạy lại AI sẽ ghi đè các vùng đã chỉnh. Tiếp tục?')) return;
+  try {
+    const r = await segmentImage(img);
+    if (r && img.id === state.currentId && !r.length) setSeg('', 'AI không tìm thấy ống nghiệm');
+  } catch (e) { if (img.id === state.currentId) setSeg('', '⚠ ' + e.message); }
+}
+$('#segRun').onclick = () => runCurrent(true);
+function maybeAutoSeg() {
+  const img = current();
+  if (img && autoSegBox.checked && img.regions == null && !RAW_EXT.test(img.storage_path) && !seg.busy.has(img.id)) runCurrent(false);
+}
+
+$('#segBatch').onclick = async () => {
+  const todo = state.images.filter(i => i.regions == null && !RAW_EXT.test(i.storage_path));
+  if (!todo.length) return toast('Tất cả ảnh trong lô đã được khoanh vùng');
+  const prog = $('#uploadProgress'); prog.classList.remove('hidden');
+  let done = 0, failed = 0;
+  const setP = () => {
+    const pct = Math.round(done / todo.length * 100);
+    $('#uploadBar').style.width = pct + '%'; $('#uploadPct').textContent = pct + '%';
+    $('#uploadLabel').textContent = `AI khoanh vùng ${done}/${todo.length} ảnh…`;
+  };
+  setP();
+  try { await ensureModel(); } catch (e) { prog.classList.add('hidden'); return toast(e.message); }
+  for (const img of todo) {
+    try { await segmentImage(img); } catch (e) { failed++; console.error(img.rel_path, e); }
+    done++; setP();
+  }
+  $('#uploadLabel').textContent = failed ? `Xong – ${failed} ảnh lỗi` : 'Đã khoanh xong';
+  setTimeout(() => prog.classList.add('hidden'), 2000);
+  toast(failed ? `Đã khoanh ${todo.length - failed} ảnh, ${failed} ảnh lỗi` : `Đã khoanh vùng ${todo.length} ảnh`);
+  showCurrent();
+};
+
+// ----- vẽ vùng đè lên ảnh -----
+function renderOverlay() {
+  const svg = $('#overlay'), img = current(), el = $('#mainImg');
+  const W = el.naturalWidth, H = el.naturalHeight;
+  svg.classList.toggle('editing', seg.editing); svg.classList.toggle('drawing', !!seg.drawing);
+  renderLegend();
+  if (!img || !W || !H || el.getAttribute('src') !== urlOf(img) || !el.complete) { svg.innerHTML = ''; $('#zoomer').style.transform = ''; return; }
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  applyZoom();
+  const rect = svg.getBoundingClientRect();
+  const upp = Math.max(W / (rect.width || W), H / (rect.height || H)); // đơn vị ảnh trên mỗi pixel màn hình
+  const regs = img.regions || [];
+  let html = '';
+  regs.forEach((r, i) => {
+    if (seg.hidden.has(r.name) || !r.pts?.length) return;
+    const c = regClass(r);
+    html += `<polygon data-i="${i}" class="${i === seg.sel ? 'sel' : ''}" style="fill:${c.hex};stroke:${c.hex}" points="${r.pts.map(([x, y]) => `${(x * W).toFixed(1)},${(y * H).toFixed(1)}`).join(' ')}"/>`;
+  });
+  regs.forEach(r => {
+    if (seg.hidden.has(r.name) || !r.pts?.length) return;
+    const b = bboxOf(r.pts), c = regClass(r);
+    html += `<text x="${(b[2] * W + 6 * upp).toFixed(1)}" y="${(((b[1] + b[3]) / 2) * H + 4 * upp).toFixed(1)}" font-size="${(12 * upp).toFixed(1)}" stroke-width="${(3 * upp).toFixed(1)}">${c.label}${r.conf != null && r.src !== 'manual' ? ' ' + Math.round(r.conf * 100) + '%' : ''}</text>`;
+  });
+  if (seg.editing) regs.forEach((r, i) => {
+    if (seg.hidden.has(r.name) || (seg.sel !== -1 && seg.sel !== i)) return;
+    const c = regClass(r);
+    r.pts.forEach(([x, y], j) => { html += `<circle class="h" data-i="${i}" data-j="${j}" cx="${(x * W).toFixed(1)}" cy="${(y * H).toFixed(1)}" r="${(5 * upp).toFixed(1)}" style="stroke:${c.hex}"/>`; });
+  });
+  if (seg.drawing) {
+    const c = REGION_CLASSES.find(k => k.name === seg.drawing.name);
+    html += `<polyline class="draft" points="${seg.drawing.pts.map(([x, y]) => `${x * W},${y * H}`).join(' ')}"/>`;
+    seg.drawing.pts.forEach(([x, y]) => { html += `<circle class="h" cx="${x * W}" cy="${y * H}" r="${(4 * upp).toFixed(1)}" style="stroke:${c.hex}"/>`; });
+  }
+  svg.innerHTML = html;
+}
+function renderLegend() {
+  const img = current(), counts = {};
+  (img?.regions || []).forEach(r => { counts[r.name] = (counts[r.name] || 0) + 1; });
+  $('#segLegend').innerHTML = REGION_CLASSES.map(c =>
+    `<button class="seg-chip ${seg.hidden.has(c.name) ? 'off' : ''}" data-n="${c.name}" title="Bật/tắt hiển thị ${c.label}"><i style="background:${c.hex}"></i>${c.label}${counts[c.name] ? `<span class="c">${counts[c.name]}</span>` : ''}</button>`).join('');
+  $('#segLegend').querySelectorAll('.seg-chip').forEach(b => b.onclick = () => {
+    seg.hidden.has(b.dataset.n) ? seg.hidden.delete(b.dataset.n) : seg.hidden.add(b.dataset.n);
+    localStorage.setItem('pg-seg-hidden', JSON.stringify([...seg.hidden]));
+    renderOverlay();
+  });
+}
+$('#mainImg').addEventListener('load', renderOverlay);
+window.addEventListener('resize', debounce(renderOverlay, 100));
+
+// ----- chỉnh tay -----
+$('#segNewCls').innerHTML = REGION_CLASSES.map(c => `<option value="${c.name}">${c.label}</option>`).join('');
+function setEditing(on) {
+  seg.editing = on; seg.sel = -1; seg.drawing = null;
+  $('#segEdit').classList.toggle('active', on);
+  $('#segEditBar').classList.toggle('hidden', !on);
+  updateDrawBtn(); renderOverlay();
+}
+function updateDrawBtn() { $('#segDraw').textContent = seg.drawing ? '✓ Hoàn tất vùng' : '+ Vẽ vùng mới'; $('#overlay').classList.toggle('drawing', !!seg.drawing); }
+$('#segEdit').onclick = () => {
+  const img = current(); if (!img) return;
+  if (RAW_EXT.test(img.storage_path)) return toast('Ảnh còn ở dạng RAW – hãy chuyển sang JPEG trước');
+  setEditing(!seg.editing);
+};
+$('#segDone').onclick = () => { if (seg.drawing) finishDraw(); setEditing(false); };
+$('#segDraw').onclick = () => {
+  if (seg.drawing) return finishDraw();
+  seg.sel = -1; seg.drawing = { name: $('#segNewCls').value, pts: [] };
+  updateDrawBtn(); renderOverlay();
+  toast('Bấm lần lượt các điểm quanh vùng · bấm đúp hoặc Enter để hoàn tất');
+};
+$('#segDel').onclick = () => deleteSelectedRegion();
+function deleteSelectedRegion() {
+  const img = current(); if (!img || seg.sel < 0 || !img.regions?.[seg.sel]) return toast('Chưa chọn vùng nào');
+  img.regions.splice(seg.sel, 1); seg.sel = -1; markManual(img, -1);
+}
+function finishDraw() {
+  const img = current(), d = seg.drawing; seg.drawing = null; updateDrawBtn();
+  if (!img || !d) return renderOverlay();
+  // bỏ các điểm trùng do bấm đúp
+  const pts = d.pts.filter((p, i, a) => i === 0 || Math.hypot(p[0] - a[i - 1][0], p[1] - a[i - 1][1]) > 0.002);
+  if (pts.length < 3) { toast('Cần ít nhất 3 điểm để tạo vùng'); return renderOverlay(); }
+  const cls = REGION_CLASSES.findIndex(c => c.name === d.name);
+  img.regions = img.regions || [];
+  img.regions.push({ cls, name: d.name, conf: null, box: bboxOf(pts), pts, src: 'manual' });
+  seg.sel = img.regions.length - 1;
+  markManual(img, seg.sel);
+}
+function handleSegKey(e) {
+  if (e.key === 'Escape') { e.preventDefault(); if (seg.drawing) { seg.drawing = null; updateDrawBtn(); renderOverlay(); } else setEditing(false); return true; }
+  if (e.key === 'Enter' && seg.drawing) { e.preventDefault(); finishDraw(); return true; }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && seg.sel >= 0) { e.preventDefault(); deleteSelectedRegion(); return true; }
+  return false;
+}
+const svgPoint = e => {
+  const svg = $('#overlay'), el = $('#mainImg');
+  const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(svg.getScreenCTM().inverse());
+  return [Math.min(1, Math.max(0, p.x / el.naturalWidth)), Math.min(1, Math.max(0, p.y / el.naturalHeight))].map(v => Math.round(v * 1e5) / 1e5);
+};
+$('#overlay').addEventListener('pointerdown', e => {
+  if (!seg.editing) return;
+  const img = current(); if (!img) return;
+  e.preventDefault();
+  if (seg.drawing) { seg.drawing.pts.push(svgPoint(e)); renderOverlay(); return; }
+  const t = e.target;
+  if (t.classList.contains('h') && t.dataset.j !== undefined) {
+    seg.drag = { i: +t.dataset.i, j: +t.dataset.j }; seg.sel = +t.dataset.i;
+    $('#overlay').setPointerCapture(e.pointerId); return;
+  }
+  seg.sel = t.tagName === 'polygon' ? +t.dataset.i : -1;
+  renderOverlay();
+});
+$('#overlay').addEventListener('pointermove', e => {
+  if (!seg.drag) return;
+  const img = current(), r = img?.regions?.[seg.drag.i]; if (!r) return;
+  r.pts[seg.drag.j] = svgPoint(e); renderOverlay();
+});
+$('#overlay').addEventListener('pointerup', e => {
+  if (!seg.drag) return;
+  const i = seg.drag.i; seg.drag = null;
+  try { $('#overlay').releasePointerCapture(e.pointerId); } catch { /* đã nhả */ }
+  markManual(current(), i);
+});
+$('#overlay').addEventListener('dblclick', e => { if (seg.drawing) { e.preventDefault(); finishDraw(); } });
+
+
+// ----- phóng to vào ống nghiệm -----
+seg.zoom = localStorage.getItem('pg-seg-zoom') !== '0';
+function applyZoom() {
+  const z = $('#zoomer'), img = current(), el = $('#mainImg'), st = $('#stage');
+  const regs = (img?.regions || []).filter(r => r.pts?.length);
+  $('#segZoom').classList.toggle('active', seg.zoom);
+  if (!seg.zoom || !regs.length || !el.naturalWidth) { z.style.transform = ''; z.style.setProperty('--zf', 1); return; }
+  const W = el.naturalWidth, H = el.naturalHeight, sw = st.clientWidth, sh = st.clientHeight;
+  const k = Math.min(sw / W, sh / H), ox = (sw - W * k) / 2, oy = (sh - H * k) / 2;
+  let [x1, y1, x2, y2] = bboxOf(regs.flatMap(r => r.pts));
+  x1 = ox + x1 * W * k; x2 = ox + x2 * W * k; y1 = oy + y1 * H * k; y2 = oy + y2 * H * k;
+  const pad = 0.12 * Math.max(x2 - x1, y2 - y1);
+  const bw = x2 - x1 + 2 * pad, bh = y2 - y1 + 2 * pad;
+  const f = Math.max(1, Math.min(sw / bw, sh / bh, 10));
+  const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+  z.style.transform = `translate(${sw / 2 - cx * f}px, ${sh / 2 - cy * f}px) scale(${f})`;
+  z.style.setProperty('--zf', f);
+}
+$('#zoomer').addEventListener('transitionend', () => renderOverlay());
+$('#segZoom').onclick = () => { seg.zoom = !seg.zoom; localStorage.setItem('pg-seg-zoom', seg.zoom ? '1' : '0'); applyZoom(); };
 
 // ---------- boot ----------
 if (sb) {

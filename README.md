@@ -25,3 +25,9 @@ tài khoản / dữ liệu / ảnh lưu trên Supabase (gói Free).
 
 Khoá anon/publishable được thiết kế để công khai; dữ liệu được bảo vệ bởi các chính sách
 Row Level Security trong `setup.sql` (mỗi tài khoản chỉ đọc/sửa dữ liệu của mình).
+
+## Khoanh vùng AI (nắp / headspace / plasma / hồng cầu)
+- Mô hình: YOLO26n-seg (Ultralytics) xuất sang ONNX → `model/tube-seg.onnx`, chạy trong trình duyệt bằng onnxruntime-web (`seg.js`).
+- Kết quả lưu ở cột `images.regions` (đa giác, toạ độ chuẩn hoá 0..1), `regions_source` = `ai` | `manual`.
+- Cập nhật mô hình mới: `yolo export model=best.pt format=onnx imgsz=416 opset=17 simplify=True`,
+  đổi tên thành `model/tube-seg.onnx`, sửa `names` trong `model/meta.json` nếu đổi lớp, tăng `?v=` trong `seg.js`.
