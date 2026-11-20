@@ -3,11 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https://urtftkmivzzhktzsdgbi.supabase.co; connect-src 'self' blob: https://urtftkmivzzhktzsdgbi.supabase.co wss://urtftkmivzzhktzsdgbi.supabase.co; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests" />
+  <meta name="referrer" content="strict-origin-when-cross-origin" />
+  <meta name="robots" content="noindex, nofollow" />
   <title>Plasma Grader — Phân loại độ đậm đặc của huyết tương</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath d=%27M16 2C16 2 6 14 6 20a10 10 0 0 0 20 0C26 14 16 2 16 2z%27 fill=%27%23e9a93a%27/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="style.css?v=16" />
+  <link rel="stylesheet" href="style.css?v=17" />
 </head>
 <body>
   <!-- ========== AUTH ========== -->
@@ -30,10 +33,10 @@
           <input name="username" required minlength="3" maxlength="32" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="vd: minh.bme4" />
         </label>
         <label>Mật khẩu
-          <input name="password" type="password" required minlength="6" autocomplete="current-password" placeholder="Tối thiểu 6 ký tự" />
+          <input name="password" type="password" required maxlength="72" autocomplete="current-password" placeholder="Mật khẩu" />
         </label>
         <label class="confirm hidden">Nhập lại mật khẩu
-          <input name="confirm" type="password" minlength="6" autocomplete="new-password" />
+          <input name="confirm" type="password" minlength="8" maxlength="72" autocomplete="new-password" />
         </label>
         <label class="remember"><input type="checkbox" name="remember" checked /> Ghi nhớ đăng nhập trên máy này</label>
         <p id="authError" class="error"></p>
@@ -43,6 +46,18 @@
   </section>
 
   <!-- ========== APP ========== -->
+  <section id="pending" class="pending hidden">
+    <div class="auth-card pending-card">
+      <div class="brand big"><span class="drop"></span>Plasma Grader</div>
+      <h2 id="pendingTitle">Tài khoản đang chờ duyệt</h2>
+      <p id="pendingText">Tài khoản <b id="pendingUser"></b> đã được tạo. Quản trị viên cần duyệt trước khi bạn xem, tải lên và phân loại ảnh. Hãy báo quản trị viên rồi bấm "Kiểm tra lại".</p>
+      <div class="mb-actions">
+        <button class="btn primary" id="pendingCheck">Kiểm tra lại</button>
+        <button class="btn outline" id="pendingLogout">Đăng xuất</button>
+      </div>
+    </div>
+  </section>
+
   <section id="app" class="app hidden">
     <header class="topbar">
       <div class="brand"><span class="drop"></span>Plasma Grader</div>
@@ -52,7 +67,7 @@
       </nav>
       <div class="live" id="liveStatus" title="Trạng thái đồng bộ"><i></i><span>Đang kết nối…</span></div>
       <div class="user">
-        <button class="btn admin-btn sm hidden" id="adminBtn">⚙ Quản trị</button>
+        <button class="btn admin-btn sm hidden" id="adminBtn">⚙ Quản trị<span class="pend-badge hidden" id="pendBadge"></span></button>
         <span class="avatar" id="avatar"></span>
         <span id="username"></span>
         <button class="btn ghost sm" id="logoutBtn">Đăng xuất</button>
@@ -249,7 +264,7 @@
           <div class="panel">
             <div class="panel-head"><h3>Tài khoản</h3><span class="muted" id="adminUserCount"></span></div>
             <div class="table-wrap"><table class="users">
-              <thead><tr><th>Tên đăng nhập</th><th>Ngày tạo</th><th>Đăng nhập gần nhất</th><th class="num">Lô</th><th class="num">Ảnh</th><th class="num">Đã chấm</th><th class="num">Dung lượng</th><th>Thao tác</th></tr></thead>
+              <thead><tr><th>Tên đăng nhập</th><th>Trạng thái</th><th>Ngày tạo</th><th>Đăng nhập gần nhất</th><th class="num">Lô</th><th class="num">Ảnh</th><th class="num">Đã chấm</th><th class="num">Dung lượng</th><th>Thao tác</th></tr></thead>
               <tbody id="adminUsers"></tbody>
             </table></div>
           </div>
@@ -266,9 +281,9 @@
     <p>Mở file <code>config.js</code> và dán <b>Project URL</b> cùng <b>anon key</b> từ Supabase, sau đó tải lại trang.</p>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="config.js?v=16"></script>
-  <script src="seg.js?v=16"></script>
-  <script src="app.js?v=16"></script>
+  <script src="vendor/supabase.js?v=2.119.2" integrity="sha384-A97u3Qnt9GZHURO9YJZRe7VQgGUeFzcv6I1oIGnUTxQrCxnpQMwR0/G8F2zt9abZ"></script>
+  <script src="config.js?v=17"></script>
+  <script src="seg.js?v=17"></script>
+  <script src="app.js?v=17"></script>
 </body>
 </html>

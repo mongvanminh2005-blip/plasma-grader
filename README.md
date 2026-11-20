@@ -31,3 +31,10 @@ Row Level Security trong `setup.sql` (mỗi tài khoản chỉ đọc/sửa dữ
 - Kết quả lưu ở cột `images.regions` (đa giác, toạ độ chuẩn hoá 0..1), `regions_source` = `ai` | `manual`.
 - Cập nhật mô hình mới: `yolo export model=best.pt format=onnx imgsz=416 opset=17 simplify=True`,
   đổi tên thành `model/tube-seg.onnx`, sửa `names` trong `model/meta.json` nếu đổi lớp, tăng `?v=` trong `seg.js`.
+
+## Bảo mật
+- Tài khoản mới phải được quản trị viên **duyệt** (Quản trị → ✓ Duyệt) mới xem/tải/chấm ảnh; có thể **khoá** tài khoản (đăng xuất mọi thiết bị). Xem `security.sql`.
+- Mọi bảng đều bật Row Level Security; quyền thừa (TRUNCATE…) đã thu hồi; kho ảnh chỉ nhận file ảnh ≤ 30 MB.
+- Mật khẩu mới: ≥ 8 ký tự, có chữ và số, không chứa tên đăng nhập. Tự đăng xuất sau 30 phút nếu không chọn "Ghi nhớ đăng nhập".
+- Thư viện được lưu trong `vendor/` (không tải từ CDN) và kiểm tra bằng mã băm SRI; Content-Security-Policy chỉ cho phép mã từ chính trang này và kết nối tới Supabase của dự án.
+- Chặn nhúng trang vào iframe, chặn chèn công thức khi mở CSV bằng Excel, link ảnh riêng tư hết hạn sau 2 giờ.

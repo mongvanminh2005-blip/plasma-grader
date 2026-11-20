@@ -1,3 +1,6 @@
+// chặn trang bị nhúng trong iframe của trang khác (clickjacking)
+if (window.top !== window.self) { try { window.top.location = window.location.href; } catch { document.documentElement.style.display = 'none'; } }
+
 // ===== Cấu hình nhãn độ (có thể sửa tuỳ quy ước của phòng xét nghiệm) =====
 const GRADES = [
   { g: 0, label: 'Trong' },
@@ -15,7 +18,7 @@ const TUBE_MAX_H = 1200;     // chiều cao tối đa ảnh ống nghiệm đã 
 const TUBE_PAD = 0.12;       // lề quanh ống (tỉ lệ chiều cao ống)
 const TUBE_QUALITY = 0.88;
 const PARALLEL = 4;         // số ảnh tải lên song song
-const URL_TTL = 60 * 60 * 6; // link ảnh riêng tư có hiệu lực 6 giờ
+const URL_TTL = 60 * 60 * 2; // link ảnh riêng tư có hiệu lực 2 giờ
 
 const $ = s => document.querySelector(s);
 const cfg = window.PG_CONFIG || {};
@@ -57,7 +60,7 @@ function viError(m = '') {
   if (/already registered|already exists/i.test(m)) return 'Tên đăng nhập này đã có người dùng';
   if (/Email not confirmed/i.test(m)) return 'Tài khoản chưa được xác nhận – cần tắt "Confirm email" trong Supabase';
   if (/invalid format|Unable to validate email/i.test(m)) return 'Tên đăng nhập không hợp lệ';
-  if (/Password should be/i.test(m)) return 'Mật khẩu tối thiểu 6 ký tự';
+  if (/Password should|weak password|password.*(length|characters)/i.test(m)) return 'Mật khẩu chưa đủ mạnh: tối thiểu 8 ký tự, có chữ và số';
   if (/rate limit/i.test(m)) return 'Thao tác quá nhanh, vui lòng thử lại sau ít phút';
   if (/Failed to fetch|NetworkError/i.test(m)) return 'Mất kết nối mạng';
   return m || 'Có lỗi xảy ra';
@@ -73,9 +76,29 @@ async function fetchAll(build) {
 }
 
 // ---------- AUTH ----------
+function showPending(user) {
+  state.user = null;
+  $('#auth').classList.add('hidden'); $('#app').classList.add('hidden'); $('#pending').classList.remove('hidden');
+  $('#pendingUser').textContent = displayName(user.email);
+}
+$('#pendingLogout').onclick = () => sb.auth.signOut();
+$('#pendingCheck').onclick = async () => {
+  const { data } = await sb.auth.getSession();
+  if (!data.session) return showAuth();
+  const ok = await sb.rpc('is_approved');
+  if (ok.data) startApp(data.session.user); else toast('Tài khoản vẫn chưa được duyệt');
+};
 function showAuth() {
+  $('#pending').classList.add('hidden');
   if (state.channel) { sb.removeChannel(state.channel); state.channel = null; }
   $('#app').classList.add('hidden'); $('#auth').classList.remove('hidden');
+}
+// mật khẩu: ≥ 8 ký tự, có cả chữ và số, không trùng tên đăng nhập
+function passwordProblem(p, user = $('#authForm')?.username?.value || '') {
+  if (p.length < 8) return 'Mật khẩu tối thiểu 8 ký tự';
+  if (!/[a-zA-Z]/.test(p) || !/\d/.test(p)) return 'Mật khẩu phải có cả chữ và số';
+  if (user && p.toLowerCase().includes(user.trim().toLowerCase())) return 'Mật khẩu không được chứa tên đăng nhập';
+  return '';
 }
 function setMode(mode) {
   state.mode = mode;
@@ -83,6 +106,10 @@ function setMode(mode) {
   $('.confirm').classList.toggle('hidden', mode !== 'register');
   $('#authForm').confirm.required = mode === 'register';
   $('#authForm').password.autocomplete = mode === 'register' ? 'new-password' : 'current-password';
+  // yêu cầu độ mạnh chỉ áp dụng khi tạo tài khoản (người cũ có thể còn mật khẩu ngắn)
+  const pw = $('#authForm').password;
+  if (mode === 'register') { pw.minLength = 8; pw.placeholder = 'Tối thiểu 8 ký tự, có chữ và số'; }
+  else { pw.removeAttribute('minlength'); pw.placeholder = 'Mật khẩu'; }
   $('#authSubmit').textContent = mode === 'register' ? 'Tạo tài khoản' : 'Đăng nhập';
   $('#authError').textContent = '';
 }
@@ -92,6 +119,7 @@ $('#authForm').onsubmit = async e => {
   const f = e.target, err = $('#authError');
   err.textContent = ''; err.style.color = '';
   if (state.mode === 'register' && f.password.value !== f.confirm.value) return (err.textContent = 'Mật khẩu nhập lại không khớp');
+  if (state.mode === 'register' && passwordProblem(f.password.value)) return (err.textContent = passwordProblem(f.password.value));
   $('#authSubmit').disabled = true;
   try {
     const name = f.username.value.trim().toLowerCase();
@@ -117,7 +145,12 @@ $('#logoutBtn').onclick = () => sb.auth.signOut();
 // ---------- APP ----------
 async function startApp(user) {
   if (state.user?.id === user.id && !$('#app').classList.contains('hidden')) return;
+  // tài khoản phải được quản trị viên duyệt
+  const ok = await sb.rpc('is_approved');
+  if (ok.error || !ok.data) return showPending(user);
+  $('#pending').classList.add('hidden');
   state.user = user;
+  startIdleTimer();
   $('#auth').classList.add('hidden'); $('#app').classList.remove('hidden');
   const dn = displayName(user.email); $('#username').textContent = dn; $('#avatar').textContent = (dn || '?')[0];
   buildGradeButtons();
@@ -126,7 +159,7 @@ async function startApp(user) {
   $('#adminBtn').classList.toggle('hidden', !state.isAdmin);
   $('#scopeBox').classList.remove('hidden');
   await loadProfiles().catch(e => { console.error(e); state.profiles = []; renderScope(); });
-  if (state.isAdmin) await loadUsers().catch(e => console.error(e));
+  if (state.isAdmin) await loadUsers().then(() => { const n = state.users.filter(u => !u.approved).length; $('#pendBadge').textContent = n; $('#pendBadge').classList.toggle('hidden', !n); }).catch(e => console.error(e));
   applySegOn();
   connectLive();
   await loadBatches();
@@ -541,7 +574,7 @@ async function exportCsv(batchId) {
     const raters = [...new Set(ratings.map(r => r.user_id))].sort((a, b) => nameOfUser(a).localeCompare(nameOfUser(b)));
     const byImg = new Map(); ratings.forEach(r => { if (!byImg.has(r.image_id)) byImg.set(r.image_id, new Map()); byImg.get(r.image_id).set(r.user_id, r); });
     const labelOf = g => GRADES.find(x => x.g === g)?.label || '';
-    const e = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const e = v => { let t = String(v ?? ''); if (/^[=+\-@\t\r]/.test(t) && !/^-?\d+(\.\d+)?$/.test(t)) t = "'" + t; return `"${t.replace(/"/g, '""')}"`; };
     const head = ['Lô', 'Người tải', 'Đường dẫn', 'Tên file', ...raters.map(u => 'Độ – ' + nameOfUser(u)),
       'Số người chấm', 'Độ phổ biến nhất', 'Mức', 'Đồng thuận', 'Chênh lệch (0–4)', 'Ghi chú',
       'Khoanh vùng', 'Plasma / (plasma + hồng cầu) theo chiều cao (%)'];
@@ -653,16 +686,20 @@ async function refreshAdmin() {
   } catch (e) { toast(e.message); }
 }
 function renderUsers() {
-  $('#adminUserCount').textContent = state.users.length + ' tài khoản';
+  const pend = state.users.filter(u => !u.approved).length;
+  $('#adminUserCount').textContent = state.users.length + ' tài khoản' + (pend ? ` · ${pend} chờ duyệt` : '');
+  $('#pendBadge').textContent = pend; $('#pendBadge').classList.toggle('hidden', !pend);
   $('#adminUsers').innerHTML = state.users.map(u => {
     const me = u.id === state.user.id;
     return `<tr data-id="${u.id}">
       <td><span class="uname">${esc(u.username)}</span>${u.is_admin ? '<span class="role">Quản trị</span>' : ''}${me ? '<span class="you">(bạn)</span>' : ''}</td>
+      <td>${u.approved ? '<span class="st ok">Đã duyệt</span>' : '<span class="st wait">⏳ Chờ duyệt / bị khoá</span>'}</td>
       <td>${dateStr(u.created_at)}</td>
       <td>${u.last_sign_in_at ? new Date(u.last_sign_in_at).toLocaleString('vi-VN') : '<span class="muted">chưa đăng nhập</span>'}</td>
       <td class="num">${u.batches}</td><td class="num">${u.images}</td><td class="num">${u.graded}</td>
       <td class="num">${fmtBytes(u.storage_bytes)}</td>
       <td><div class="actions">
+        ${me ? '' : (u.approved ? '<button class="btn outline" data-act="lock">Khoá</button>' : '<button class="btn primary" data-act="approve">✓ Duyệt</button>')}
         <button class="btn outline" data-act="view">Xem dữ liệu</button>
         <button class="btn outline" data-act="pass">Đặt lại mật khẩu</button>
         ${me ? '' : `<button class="btn outline" data-act="role">${u.is_admin ? 'Bỏ quản trị' : 'Cấp quản trị'}</button>
@@ -675,10 +712,16 @@ function renderUsers() {
 async function adminAction(act, u) {
   try {
     if (act === 'view') return viewUserData(u.id);
+    if (act === 'approve' || act === 'lock') {
+      if (act === 'lock' && !confirm(`Khoá tài khoản "${u.username}"? Người này bị đăng xuất khỏi mọi thiết bị và không xem được dữ liệu nữa (dữ liệu vẫn giữ nguyên, có thể duyệt lại).`)) return;
+      check(await sb.rpc('admin_set_approved', { target: u.id, approve: act === 'approve' }));
+      toast(act === 'approve' ? `Đã duyệt ${u.username}` : `Đã khoá ${u.username}`);
+      return refreshAdmin();
+    }
     if (act === 'pass') {
-      const p = prompt(`Nhập mật khẩu mới cho "${u.username}" (tối thiểu 6 ký tự):`);
+      const p = prompt(`Nhập mật khẩu mới cho "${u.username}" (tối thiểu 8 ký tự, có chữ và số):`);
       if (p === null) return;
-      if (p.length < 6) return toast('Mật khẩu tối thiểu 6 ký tự');
+      if (passwordProblem(p, u.username)) return toast(passwordProblem(p, u.username));
       check(await sb.rpc('admin_set_password', { target: u.id, new_password: p }));
       return toast(`Đã đổi mật khẩu cho ${u.username}`);
     }
@@ -976,10 +1019,11 @@ const REGION_CLASSES = [
 const TUBE_LAYER = { name: 'tube', label: 'Ống nghiệm', hex: '#16a34a' };
 const regClass = r => REGION_CLASSES.find(c => c.name === r.name) || { label: r.name, hex: '#a855f7' };
 const seg = { hidden: new Set(JSON.parse(localStorage.getItem('pg-seg-hidden') || '[]')), editing: false, drawing: null, sel: -1, busy: new Set(), drag: null, shownId: null };
-const ORT_URL = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/ort.wasm.min.js';
+const ORT_URL = 'vendor/ort.wasm.min.js?v=1.31.1';
+const ORT_SRI = 'sha384-tNxIwEqSlcdvKtUte98AsccPbDKM958LBXB/+3BLS42TTihXHKTWgdqPqXI/lot8';
 let ortLoading = null;
 const loadOrt = () => window.ort ? Promise.resolve() : (ortLoading ||= new Promise((res, rej) => {
-  const sc = document.createElement('script'); sc.src = ORT_URL; sc.onload = res;
+  const sc = document.createElement('script'); sc.src = ORT_URL; sc.integrity = ORT_SRI; sc.onload = res;
   sc.onerror = () => { ortLoading = null; rej(new Error('Không tải được thư viện AI')); };
   document.head.appendChild(sc);
 }));
@@ -1468,6 +1512,17 @@ $('#mergeGo').onclick = async () => {
     await openBatch(target);
   } catch (e) { toast(e.message); $('#mergeGo').disabled = false; }
 };
+
+
+// ---------- tự đăng xuất sau 30 phút không thao tác (khi không ghi nhớ đăng nhập) ----------
+const IDLE_MS = 30 * 60 * 1000;
+let idleTimer = null;
+function startIdleTimer() {
+  if (localStorage.getItem(REMEMBER_KEY) !== '0') return;
+  const reset = () => { clearTimeout(idleTimer); idleTimer = setTimeout(() => { toast('Đã tự đăng xuất vì không thao tác 30 phút'); sb.auth.signOut(); }, IDLE_MS); };
+  ['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach(ev => window.addEventListener(ev, reset, { passive: true }));
+  reset();
+}
 
 // ---------- boot ----------
 if (sb) {

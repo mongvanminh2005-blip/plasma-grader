@@ -431,3 +431,13 @@ table.matrix td.self, table.matrix td.na { background: #f3f5f7; color: var(--mut
 .thumb .tpick { position: absolute; top: 5px; left: 5px; width: 17px; height: 17px; margin: 0; accent-color: var(--danger); pointer-events: none; }
 .thumb.picked { border-color: var(--danger); box-shadow: 0 0 0 2px #fde2e2; }
 .thumb.picked img { opacity: .75; }
+
+/* ---------- Bảo mật ---------- */
+.pending { min-height: 100%; display: grid; place-items: center; background: radial-gradient(1000px 500px at 0 0, #d7f0ec 0, transparent 60%), #f8faf9; }
+.pending-card { display: flex; flex-direction: column; gap: 14px; max-width: 460px; }
+.pending-card h2 { margin: 6px 0 0; }
+.pending-card p { margin: 0; color: var(--muted); }
+.st { font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 6px; white-space: nowrap; }
+.st.ok { background: #e7f6ec; color: #166534; }
+.st.wait { background: #fff4e0; color: #8a5a00; }
+.pend-badge { margin-left: 6px; background: #dc2626; color: #fff; border-radius: 99px; font-size: 11px; padding: 0 6px; line-height: 17px; }
