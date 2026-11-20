@@ -5,6 +5,7 @@ const GRADES = [
   { g: 2, label: 'Đục vừa' },
   { g: 3, label: 'Đục rõ' },
   { g: 4, label: 'Đục nặng' },
+  { g: 5, label: 'Cân nhắc lựa chọn' },
 ];
 const BUCKET = 'plasma';
 let rawBusy = false;      // đang chuyển RAW → JPEG
@@ -125,6 +126,7 @@ async function startApp(user) {
   $('#adminBtn').classList.toggle('hidden', !state.isAdmin);
   $('#scopeBox').classList.toggle('hidden', !state.isAdmin);
   if (state.isAdmin) await loadUsers().catch(e => { console.error(e); renderScope(); });
+  applySegOn();
   connectLive();
   await loadBatches();
   const saved = Number(localStorage.getItem('batchId'));
@@ -716,7 +718,7 @@ async function cropToTube(img, regions, maxH) {
 //  - "Chỉ lưu phần ống nghiệm": AI khoanh vùng rồi chỉ giữ phần ống (tiết kiệm nhất)
 //  - "Nén ảnh": thu nhỏ ảnh còn lại về tối đa 1600px
 async function prepare(file) {
-  const raw = RAW_EXT.test(file.name), compress = $('#compress').checked, crop = $('#cropTube').checked;
+  const raw = RAW_EXT.test(file.name), compress = $('#compress').checked, crop = segOn() && $('#cropTube').checked;
   const decodable = raw || /^image\/(jpeg|png|webp|bmp)$/.test(file.type);
   if (!decodable || (!raw && !compress && !crop)) return { blob: file, ext: extOf(file), regions: null };
   let src, orientation = 1;
@@ -757,7 +759,7 @@ async function handleFiles(list) {
   let batchId = uploadTarget, done = 0, failed = 0, saved = 0;
   try {
     if (!batchId) batchId = check(await sb.from('batches').insert({ name }).select('id').single()).id;
-    if ($('#cropTube').checked) {
+    if (segOn() && $('#cropTube').checked) {
       setP(0, 'Đang tải mô hình AI…');
       try { await ensureModel(); } catch (e) { toast('Không tải được AI – sẽ lưu cả ảnh'); }
     }
@@ -875,6 +877,18 @@ function plasmaRatio(regions) {
   return p && c ? Math.round(p / (p + c) * 1000) / 10 : '';
 }
 
+const segOnBox = $('#segOn');
+const segOn = () => segOnBox.checked;
+segOnBox.checked = localStorage.getItem('pg-seg-on') !== '0';
+function applySegOn() {
+  const on = segOn();
+  $('#viewerBox').classList.toggle('seg-off', !on);
+  $('#cropOpt').classList.toggle('disabled', !on);
+  $('#cropTube').disabled = !on;
+  if (!on && seg.editing) setEditing(false);
+  renderOverlay();
+}
+segOnBox.onchange = () => { localStorage.setItem('pg-seg-on', segOn() ? '1' : '0'); applySegOn(); if (segOn()) maybeAutoSeg(); };
 const cropBox = $('#cropTube');
 cropBox.checked = localStorage.getItem('pg-crop') !== '0';
 cropBox.onchange = () => localStorage.setItem('pg-crop', cropBox.checked ? '1' : '0');
@@ -921,7 +935,7 @@ async function runCurrent(force) {
 $('#segRun').onclick = () => runCurrent(true);
 function maybeAutoSeg() {
   const img = current();
-  if (img && autoSegBox.checked && img.regions == null && !RAW_EXT.test(img.storage_path) && !seg.busy.has(img.id)) runCurrent(false);
+  if (img && segOn() && autoSegBox.checked && img.regions == null && !RAW_EXT.test(img.storage_path) && !seg.busy.has(img.id)) runCurrent(false);
 }
 
 $('#segBatch').onclick = async () => {
@@ -952,6 +966,7 @@ function renderOverlay() {
   const W = el.naturalWidth, H = el.naturalHeight;
   svg.classList.toggle('editing', seg.editing); svg.classList.toggle('drawing', !!seg.drawing);
   renderLegend();
+  if (!segOn()) { svg.innerHTML = ''; $('#zoomer').style.transform = ''; $('#zoomer').style.setProperty('--zf', 1); return; }
   if (!img || !W || !H || el.getAttribute('src') !== urlOf(img) || !el.complete) { svg.innerHTML = ''; $('#zoomer').style.transform = ''; return; }
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   applyZoom();
