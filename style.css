@@ -462,3 +462,17 @@ table.matrix td.self, table.matrix td.na { background: #f3f5f7; color: var(--mut
 .backup-body p { margin: 0; }
 .muted.small { font-size: 12px; }
 
+
+/* ---------- Đổi tên lô & thống kê theo lô ---------- */
+.bren { border: 0; background: transparent; color: var(--muted); padding: 0 4px 0 0; font-size: 13px; cursor: pointer; opacity: 0; transition: opacity .15s; }
+.batch-list li:hover .bren, .batch-list li.active .bren { opacity: 1; }
+.bren:hover { color: var(--accent); }
+.sum-scope { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.scope-chip { font-size: 13px; padding: 6px 12px; border-radius: 10px; }
+.scope-chip.all { background: var(--accent-soft); color: #0b5f59; }
+.scope-chip.one { background: #fff4e0; color: #7a5a12; }
+.sum-batches tr.brow { cursor: pointer; }
+.sum-batches tr.brow:hover { background: #f6faf9; }
+.sum-batches tr.btotal td { font-weight: 700; background: #fafbfc; border-top: 2px solid var(--line); }
+.sum-batches small { color: var(--muted); font-weight: 400; font-size: 11px; }
+.sum-batches .distcell { min-width: 200px; width: 30%; }

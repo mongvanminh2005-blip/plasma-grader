@@ -241,12 +241,15 @@ function renderBatches() {
     const canMerge = b.user_id === state.user?.id || state.isAdmin;
     const pick = state.merge ? (canMerge ? `<input type="checkbox" class="mpick" ${state.merge.has(b.id) ? 'checked' : ''} />` : '<span class="mpick-x" title="Không phải lô của bạn">—</span>') : '';
     return `<li data-id="${b.id}" class="${b.id === state.batchId && !state.merge ? 'active' : ''} ${state.merge ? 'picking' : ''} ${state.merge?.has(b.id) ? 'picked' : ''} ${state.merge && !canMerge ? 'nopick' : ''}">${pick}<div class="bbody">
-      <div class="bn" title="${esc(b.name)}">${b.user_id !== state.user?.id ? `<span class="owner-tag">${esc(b.owner || '?')}</span>` : (b.shared ? '' : '<span class="owner-tag lock" title="Lô riêng">🔒</span>')}${esc(b.name)}</div>
+      <div class="bn" title="${esc(b.name)}">${!state.merge && canMerge ? `<button class="bren" data-ren="${b.id}" title="Đổi tên lô">✎</button>` : ''}${b.user_id !== state.user?.id ? `<span class="owner-tag">${esc(b.owner || '?')}</span>` : (b.shared ? '' : '<span class="owner-tag lock" title="Lô riêng">🔒</span>')}${esc(b.name)}</div>
       <div class="bm"><span>Tôi: ${b.graded}/${b.total} · 👥 ${b.raters || 0} · ${dateStr(b.created_at)}</span>
         ${pct === 100 && b.total ? '<span class="done">Xong</span>' : `<span>${pct}%</span>`}</div>
       <div class="bar"><i style="width:${pct}%"></i></div></div></li>`;
   }).join('');
-  ul.querySelectorAll('li[data-id]').forEach(li => li.onclick = () => state.merge ? toggleMergePick(Number(li.dataset.id)) : openBatch(Number(li.dataset.id)));
+  ul.querySelectorAll('li[data-id]').forEach(li => li.onclick = e => {
+    if (e.target.dataset.ren) { e.stopPropagation(); return renameBatch(Number(e.target.dataset.ren)); }
+    state.merge ? toggleMergePick(Number(li.dataset.id)) : openBatch(Number(li.dataset.id));
+  });
   $('#emptyState').classList.toggle('hidden', !!state.batchId || state.view !== 'grade');
 }
 
@@ -316,6 +319,7 @@ function renderAll() {
   $('#addToBatch').classList.toggle('hidden', other);
   const canManage = !other || state.isAdmin;
   $('#sharedBox').classList.toggle('hidden', !canManage);
+  $('#renameBatch').classList.toggle('hidden', !canManage);
   $('#batchShared').checked = !!b.shared;
   $('#deleteBatch').classList.toggle('hidden', !canManage);
   $('#batchName').readOnly = !canManage;
@@ -530,6 +534,20 @@ $('#batchName').addEventListener('change', async e => {
   catch (ex) { toast(ex.message); }
 });
 $('#batchName').addEventListener('keydown', e => e.key === 'Enter' && e.target.blur());
+async function renameBatch(id) {
+  const b = state.batches.find(x => x.id === id); if (!b) return;
+  let name = prompt('Tên mới cho lô:', b.name);
+  if (name === null) return;
+  name = name.trim().slice(0, 120);
+  if (!name) return toast('Tên lô không được để trống');
+  if (name === b.name) return;
+  try {
+    check(await sb.from('batches').update({ name }).eq('id', id));
+    toast(`Đã đổi tên lô thành "${name}"`);
+    await loadBatches(); if (state.batchId === id) renderAll();
+  } catch (e) { toast(e.message); }
+}
+$('#renameBatch').onclick = () => state.batchId && renameBatch(state.batchId);
 $('#batchShared').onchange = async e => {
   try {
     check(await sb.from('batches').update({ shared: e.target.checked }).eq('id', state.batchId));
@@ -1388,11 +1406,33 @@ async function refreshSummary(quiet) {
     const bid = sel.value ? Number(sel.value) : null;
     const { images, ratings } = await loadRatingData(bid);
     sumData = computeSummary(images, ratings, new Map(batches.map(b => [b.id, b.name])));
+    sumData.batchRows = bid ? null : computeBatchRows(images, ratings, batches);
+    sumData.scope = bid ? batches.find(b => b.id === bid) : { count: batches.length };
     renderSummary();
   } catch (e) { toast(e.message); }
   $('#sumBody').classList.remove('loading');
 }
 $('#sumBatch').onchange = () => { sumShowAll = false; refreshSummary(); };
+function showSummaryFor(batchId) {
+  $('#sumBatch').value = batchId ? String(batchId) : '';
+  sumShowAll = false; refreshSummary();
+  $('#main').scrollTop = 0;
+}
+// thống kê gộp theo từng lô
+function computeBatchRows(images, ratings, batches) {
+  const byImg = new Map();
+  ratings.forEach(r => { if (!byImg.has(r.image_id)) byImg.set(r.image_id, []); byImg.get(r.image_id).push(r); });
+  const rows = new Map(batches.map(b => [b.id, { b, images: 0, graded: 0, raters: new Set(), dist: [0, 0, 0, 0, 0, 0], multi: 0, full: 0 }]));
+  images.forEach(im => {
+    const row = rows.get(im.batch_id); if (!row) return;
+    row.images++;
+    const rs = byImg.get(im.id) || [];
+    if (rs.length) row.graded++;
+    rs.forEach(r => { row.raters.add(r.user_id); row.dist[r.grade]++; });
+    if (rs.length >= 2) { row.multi++; if (new Set(rs.map(r => r.grade)).size === 1) row.full++; }
+  });
+  return [...rows.values()];
+}
 $('#sumRefresh').onclick = () => refreshSummary();
 $('#sumExport').onclick = () => exportCsv($('#sumBatch').value ? Number($('#sumBatch').value) : null);
 
@@ -1430,6 +1470,32 @@ function computeSummary(images, ratings, batchNames) {
 const pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '–';
 function renderSummary() {
   const d = sumData; if (!d) return;
+  const sc = d.scope || {};
+  $('#sumScope').innerHTML = d.batchRows
+    ? `<span class="scope-chip all">📊 Đang xem: <b>Tổng các lô</b> (${sc.count || 0} lô)</span>`
+    : `<span class="scope-chip one">📁 Đang xem lô: <b>${esc(sc.name || '')}</b>${sc.owner ? ` · của ${esc(sc.owner)}` : ''}</span><button class="link" id="sumBackAll">← Xem tổng các lô</button>`;
+  $('#sumBackAll')?.addEventListener('click', () => showSummaryFor(null));
+  $('#sumBatchesPanel').classList.toggle('hidden', !d.batchRows);
+  if (d.batchRows) {
+    const rows = d.batchRows;
+    const distBar = dist => { const n = dist.reduce((a, c) => a + c, 0); return n ? `<div class="stack">${dist.map((c, g) => c ? `<i class="cg${g}" style="flex:${c}" title="Độ ${g} (${GRADES[g].label}): ${c} lượt (${pct(c, n)})"></i>` : '').join('')}</div>` : '<span class="muted">–</span>'; };
+    const tot = rows.reduce((t, r) => { t.images += r.images; t.graded += r.graded; r.raters.forEach(u => t.raters.add(u)); r.dist.forEach((c, g) => t.dist[g] += c); t.multi += r.multi; t.full += r.full; return t; },
+      { images: 0, graded: 0, raters: new Set(), dist: [0, 0, 0, 0, 0, 0], multi: 0, full: 0 });
+    $('#sumBatches').innerHTML = rows.length ? rows.map(r => `
+      <tr class="brow" data-b="${r.b.id}" title="Xem thống kê riêng lô này">
+        <td class="uname">${esc(r.b.name)}</td><td>${esc(r.b.owner || '')}</td>
+        <td class="num">${r.images}</td>
+        <td class="num">${r.graded}<small> (${pct(r.graded, r.images)})</small></td>
+        <td class="num">${r.raters.size}</td>
+        <td class="num">${r.multi ? pct(r.full, r.multi) : '–'}${r.multi ? `<small> (${r.multi})</small>` : ''}</td>
+        <td class="distcell">${distBar(r.dist)}</td>
+        <td class="num"><span class="link">Xem →</span></td></tr>`).join('') + `
+      <tr class="btotal"><td class="uname">Tổng cộng</td><td></td><td class="num">${tot.images}</td>
+        <td class="num">${tot.graded}<small> (${pct(tot.graded, tot.images)})</small></td><td class="num">${tot.raters.size}</td>
+        <td class="num">${tot.multi ? pct(tot.full, tot.multi) : '–'}</td><td class="distcell">${distBar(tot.dist)}</td><td></td></tr>`
+      : '<tr><td colspan="8" class="muted empty-row">Chưa có lô nào</td></tr>';
+    $('#sumBatches').querySelectorAll('tr.brow').forEach(tr => tr.onclick = () => showSummaryFor(Number(tr.dataset.b)));
+  }
   const tile = (k, v, sub = '') => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div>${sub ? `<div class="k">${sub}</div>` : ''}</div>`;
   $('#sumCards').innerHTML =
     tile('Ảnh đã có người phân loại', `${d.gradedImgs}<small>/${d.total}</small>`) +
