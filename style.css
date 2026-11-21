@@ -476,3 +476,6 @@ table.matrix td.self, table.matrix td.na { background: #f3f5f7; color: var(--mut
 .sum-batches tr.btotal td { font-weight: 700; background: #fafbfc; border-top: 2px solid var(--line); }
 .sum-batches small { color: var(--muted); font-weight: 400; font-size: 11px; }
 .sum-batches .distcell { min-width: 200px; width: 30%; }
+
+.thumbs-head { justify-content: space-between; }
+.shuffle-btn.on { color: var(--accent); font-weight: 600; }

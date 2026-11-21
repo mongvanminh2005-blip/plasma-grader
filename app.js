@@ -253,6 +253,29 @@ function renderBatches() {
   $('#emptyState').classList.toggle('hidden', !!state.batchId || state.view !== 'grade');
 }
 
+// ---------- xáo ảnh: mỗi người một thứ tự ngẫu nhiên riêng, cố định qua các lần mở ----------
+const isShuffled = () => localStorage.getItem('pg-shuffle') !== '0';
+function hash32(str) { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } h ^= h >>> 15; h = Math.imul(h, 0x2c1b3c6d); h ^= h >>> 12; return h >>> 0; }
+function orderImages(imgs) {
+  if (isShuffled()) {
+    const key = state.user.id + ':';
+    imgs.forEach(i => { i._k = hash32(key + i.id); });
+    imgs.sort((a, b) => a._k - b._k || a.id - b.id);
+  } else imgs.sort((a, b) => (a.rel_path < b.rel_path ? -1 : a.rel_path > b.rel_path ? 1 : a.id - b.id));
+  return imgs;
+}
+const shownName = img => isShuffled() ? `Ảnh ${state.images.indexOf(img) + 1}/${state.images.length} · tên tệp được ẩn khi xáo` : img.rel_path;
+function updateShuffleBtn() {
+  const on = isShuffled();
+  $('#shuffleBtn').classList.toggle('on', on);
+  $('#shuffleBtn').textContent = on ? '🔀 Đang xáo ảnh' : '🔀 Xáo ảnh';
+}
+$('#shuffleBtn').onclick = () => {
+  localStorage.setItem('pg-shuffle', isShuffled() ? '0' : '1');
+  orderImages(state.images); updateShuffleBtn();
+  toast(isShuffled() ? 'Đã xáo ảnh: thứ tự ngẫu nhiên riêng của bạn, ẩn tên tệp' : 'Đã tắt xáo: xếp theo tên tệp');
+  renderAll(); showCurrent();
+};
 async function fetchImages(batchId) {
   const imgs = await fetchAll(() => sb.from('images')
     .select('id, batch_id, user_id, filename, rel_path, storage_path, regions, regions_source, regions_at')
@@ -264,7 +287,7 @@ async function fetchImages(batchId) {
   const byId = new Map(mine.map(r => [r.image_id, r]));
   imgs.forEach(i => { const r = byId.get(i.id); i.grade = r?.grade ?? null; i.note = r?.note ?? ''; i.graded_at = r?.graded_at ?? null; });
   await signUrls(imgs);
-  return imgs;
+  return orderImages(imgs);
 }
 async function signUrls(imgs) {
   const now = Date.now();
@@ -346,6 +369,7 @@ function renderAll() {
     if (!v.some(i => i.id === state.currentId) && v[0]) state.currentId = v[0].id;
     renderAll(); showCurrent();
   });
+  updateShuffleBtn();
   renderThumbs();
   renderGradeSelection();
 }
@@ -354,7 +378,7 @@ function renderThumbs() {
   const v = view(), box = $('#thumbs');
   if (!v.length) { box.innerHTML = '<div class="none-msg">Không có ảnh nào trong bộ lọc này</div>'; return; }
   box.innerHTML = v.map(i => `
-    <div class="thumb ${i.id === state.currentId ? 'current' : ''} ${RAW_EXT.test(i.storage_path) ? 'raw' : ''} ${state.pick?.has(i.id) ? 'picked' : ''}" data-id="${i.id}" title="${esc(i.rel_path)}">
+    <div class="thumb ${i.id === state.currentId ? 'current' : ''} ${RAW_EXT.test(i.storage_path) ? 'raw' : ''} ${state.pick?.has(i.id) ? 'picked' : ''}" data-id="${i.id}" ${isShuffled() ? '' : `title="${esc(i.rel_path)}"`}>
       <img loading="lazy" src="${esc(urlOf(i))}" alt="" />
       ${state.pick ? (canDelete(i) ? `<input type="checkbox" class="tpick" ${state.pick.has(i.id) ? 'checked' : ''} />` : '') : (canDelete(i) ? `<button class="del" data-del="${i.id}" title="Xoá ảnh">✕</button>` : '')}
       ${i.grade === null ? '<span class="badge none">–</span>' : `<span class="badge" data-g="${i.grade}">${i.grade}</span>`}
@@ -374,14 +398,14 @@ function showCurrent() {
   if (!img) { $('#fname').textContent = 'Không có ảnh'; $('#saveState').textContent = ''; $('#delImg').classList.add('hidden'); return; }
   const u = urlOf(img);
   if ($('#mainImg').getAttribute('src') !== u) $('#mainImg').src = u;
-  $('#fname').textContent = img.rel_path; $('#fname').title = img.rel_path;
+  $('#fname').textContent = shownName(img); $('#fname').title = isShuffled() ? '' : img.rel_path;
   const pos = v.findIndex(i => i.id === img.id);
   $('#counter').textContent = pos >= 0 ? `${pos + 1} / ${v.length}` : `${state.images.indexOf(img) + 1} / ${state.images.length}`;
   if (document.activeElement !== $('#note')) $('#note').value = img.note || '';
   setSave(img.graded_at ? 'ok' : '', img.graded_at ? 'Đã lưu lúc ' + timeStr(img.graded_at) : 'Chưa phân loại');
   renderGradeSelection();
   $('#delImg').classList.toggle('hidden', !canDelete(img));
-  if (seg.shownId !== img.id) { seg.shownId = img.id; seg.sel = -1; seg.drawing = null; seg.pan = [0, 0]; if (seg.zoomFree) { seg.zoomFree = false; seg.zoomMode = localStorage.getItem('pg-zoom') || '3'; } updateDrawBtn(); }
+  if (seg.shownId !== img.id) { seg.shownId = img.id; seg.sel = -1; seg.drawing = null; seg.pan = [0, 0]; if (seg.zoomFree) { seg.zoomFree = false; seg.zoomMode = sessionStorage.getItem('pg-zoom') || '1'; } updateDrawBtn(); }
   renderOverlay();
   if (!seg.busy.has(img.id)) setSeg('', segSummary(img));
   maybeAutoSeg();
@@ -519,7 +543,7 @@ document.addEventListener('keydown', e => {
     return;
   }
   if (seg.editing && handleSegKey(e)) return;
-  if ((e.key === 'z' || e.key === 'Z') && !e.ctrlKey && !e.metaKey) return setZoom(seg.zoomMode === 'fit' ? 3 : 'fit');
+  if ((e.key === 'z' || e.key === 'Z') && !e.ctrlKey && !e.metaKey) return setZoom(seg.zoomMode === 'fit' ? 1 : 'fit');
   if (e.key === 'Escape') return $('#lightbox').classList.add('hidden');
   if (GRADES.some(x => String(x.g) === e.key)) { e.preventDefault(); setGrade(Number(e.key)); }
   else if (e.key === 'ArrowRight') step(1);
@@ -1310,7 +1334,7 @@ $('#overlay').addEventListener('dblclick', e => { if (seg.drawing) { e.preventDe
 
 // ----- phóng to / di chuyển ảnh -----
 // mức phóng: 'fit' = vừa ống nghiệm, hoặc số lần so với cả ảnh vừa khung (mặc định 3×), tâm = tâm ống nghiệm (hoặc tâm ảnh)
-seg.zoomMode = localStorage.getItem('pg-zoom') || '3';
+seg.zoomMode = '1';   // luôn mở ở 1×; mức chọn chỉ giữ trong phiên
 seg.pan = [0, 0];
 let lastZoom = { f: 1 };
 function zoomTarget() {
@@ -1353,7 +1377,7 @@ function applyZoom() {
 }
 function setZoom(mode) {
   seg.zoomMode = String(mode); seg.pan = [0, 0]; seg.zoomFree = false;
-  localStorage.setItem('pg-zoom', seg.zoomMode);
+  sessionStorage.setItem('pg-zoom', seg.zoomMode);
   applyZoom();
 }
 $('#zoomCtl').querySelectorAll('button').forEach(b => b.onclick = e => { e.stopPropagation(); setZoom(b.dataset.z); });
