@@ -315,7 +315,7 @@ const urlOf = img => state.urls.get(img.storage_path)?.url || '';
 async function openBatch(id) {
   closeAdmin();
   if (state.pick) setPick(false);
-  if (state.view !== 'grade') { state.view = 'grade'; document.querySelectorAll('.nav-tab').forEach(b => b.classList.toggle('active', b.dataset.view === 'grade')); $('#summaryPanel').classList.add('hidden'); $('#trashPanel').classList.add('hidden'); $('#trashBtn').classList.remove('active'); }
+  if (state.view !== 'grade') { state.view = 'grade'; document.querySelectorAll('.nav-tab').forEach(b => b.classList.toggle('active', b.dataset.view === 'grade')); $('#summaryPanel').classList.add('hidden'); $('#trashPanel').classList.add('hidden'); $('#colorPanel').classList.add('hidden'); $('#trashBtn').classList.remove('active'); }
   state.batchId = id; state.filter = 'all';
   localStorage.setItem('batchId', id);
   renderBatches();
@@ -744,6 +744,7 @@ function setView(v) {
   state.view = v;
   document.querySelectorAll('.nav-tab').forEach(b => b.classList.toggle('active', b.dataset.view === v));
   $('#summaryPanel').classList.toggle('hidden', v !== 'summary');
+  $('#colorPanel').classList.toggle('hidden', v !== 'color');
   $('#trashPanel').classList.toggle('hidden', v !== 'trash');
   $('#trashBtn').classList.toggle('active', v === 'trash');
   if (v !== 'admin') closeAdmin();
@@ -755,6 +756,7 @@ function setView(v) {
     $('#workspace').classList.add('hidden'); $('#emptyState').classList.add('hidden');
   }
   if (v === 'summary') refreshSummary();
+  if (v === 'color') refreshColor();
   if (v === 'trash') refreshTrash();
 }
 document.querySelectorAll('.nav-tab').forEach(b => b.onclick = () => setView(b.dataset.view));
@@ -765,7 +767,7 @@ function closeAdmin() {
 async function openAdmin() {
   state.view = 'admin';
   document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
-  $('#summaryPanel').classList.add('hidden'); $('#trashPanel').classList.add('hidden');
+  $('#summaryPanel').classList.add('hidden'); $('#trashPanel').classList.add('hidden'); $('#colorPanel').classList.add('hidden');
   state.adminOpen = true;
   $('#adminBtn').classList.add('active');
   $('#workspace').classList.add('hidden'); $('#emptyState').classList.add('hidden');
@@ -1897,3 +1899,156 @@ if (sb) {
     }, 0);
   });
 }
+
+
+// ---------- PHÂN TÍCH MÀU (mô hình của D:\BME4\analyze_color.py + hồi quy logistic) ----------
+const colorCache = new Map();          // id:độ dài vùng -> đặc trưng
+let colData = null, colRun = 0, colFilter = 'all', colFeat = 'b';
+const COL_FEATS = [['b', 'b* (vàng)'], ['C', 'C (độ đậm màu)'], ['g_chrom', 'g_chrom'], ['a', 'a* (đỏ)'], ['L', 'L (sáng)'], ['S', 'S (bão hoà)'], ['pLoai', 'P(Loại)']];
+const fmtN = (v, d = 1) => Number.isFinite(v) ? v.toFixed(d) : '–';
+function majorityGrade(rs) {
+  const g = rs.map(r => r.grade).filter(x => x !== 5);
+  if (!g.length) return null;
+  const m = modeOf(g); return m.length === 1 ? m[0] : null;   // hoà thì không tính
+}
+async function refreshColor() {
+  const run = ++colRun, sel = $('#colBatch');
+  try {
+    const model = await PlasmaColor.loadModel();
+    $('#colModelInfo').textContent = `Mô hình: hồi quy logistic trên màu plasma, học từ ${model.trained_on} ảnh CR2 của bạn · phân biệt Nhận (0–2) / Loại (3–4): AUC ${model.cv.auc} · độ ước tính đúng ${Math.round(model.cv.grade_acc * 100)}%, lệch ≤ 1 độ ${Math.round(model.cv.grade_within1 * 100)}%`;
+    const batches = await fetchAll(() => sb.from('batch_stats').select('id, name, owner, total').order('id', { ascending: false }));
+    const cur = sel.value;
+    sel.innerHTML = `<option value="">Tất cả lô (${batches.length})</option>` + batches.map(b => `<option value="${b.id}">${esc(b.name)} · ${esc(b.owner || '')} · ${b.total} ảnh</option>`).join('');
+    sel.value = [...sel.options].some(o => o.value === cur) ? cur : (state.batchId && [...sel.options].some(o => o.value === String(state.batchId)) ? String(state.batchId) : '');
+    const bid = sel.value ? Number(sel.value) : null;
+    const { images, ratings } = await loadRatingData(bid);
+    const bname = new Map(batches.map(b => [b.id, b.name]));
+    const byImg = new Map();
+    ratings.forEach(r => { if (!byImg.has(r.image_id)) byImg.set(r.image_id, []); byImg.get(r.image_id).push(r); });
+    await signUrls(images.filter(i => !RAW_EXT.test(i.storage_path)));
+    colData = images.map(im => ({ im, batch: bname.get(im.batch_id) || '', rs: byImg.get(im.id) || [], human: majorityGrade(byImg.get(im.id) || []), feat: null, pred: null }));
+    renderColor();
+    // phân tích (4 ảnh cùng lúc), hiện dần kết quả
+    const todo = colData.filter(r => { const k = r.im.id + ':' + JSON.stringify(r.im.regions || '').length; r.key = k; if (colorCache.has(k)) { r.feat = colorCache.get(k); r.pred = PlasmaColor.predict(r.feat); return false; } return true; });
+    let done = colData.length - todo.length;
+    const prog = () => { $('#colProgress').classList.toggle('hidden', done >= colData.length); $('#colProgText').textContent = `Đang phân tích màu ${done}/${colData.length} ảnh…`; $('#colProgBar').style.width = (colData.length ? done / colData.length * 100 : 0) + '%'; };
+    prog();
+    const redraw = debounce(() => run === colRun && renderColor(), 300);
+    let k = 0;
+    const worker = async () => {
+      while (k < todo.length && run === colRun) {
+        const r = todo[k++];
+        try {
+          if (RAW_EXT.test(r.im.storage_path)) r.feat = { error: 'Ảnh RAW chưa chuyển JPEG' };
+          else if (!r.im.regions?.length) r.feat = { error: 'Chưa khoanh vùng' };
+          else {
+            const res = await fetch(urlOf(r.im)); if (!res.ok) throw new Error('Không tải được ảnh');
+            const bmp = await createImageBitmap(await res.blob());
+            r.feat = PlasmaColor.analyze(bmp, r.im.regions); bmp.close();
+          }
+        } catch (e) { r.feat = { error: e.message }; }
+        colorCache.set(r.key, r.feat); r.pred = PlasmaColor.predict(r.feat);
+        done++; prog(); redraw();
+      }
+    };
+    await Promise.all([worker(), worker(), worker(), worker()]);
+    if (run === colRun) { prog(); renderColor(); }
+  } catch (e) { toast(e.message); }
+}
+function colStats(rows) {
+  const ok = rows.filter(r => r.pred);
+  const withH = ok.filter(r => r.human !== null);
+  const loaiOk = withH.filter(r => r.pred.loai === (r.human >= 3)).length;
+  const exact = withH.filter(r => r.pred.grade === r.human).length;
+  const near = withH.filter(r => Math.abs(r.pred.grade - r.human) <= 1).length;
+  return { ok, withH, loaiOk, exact, near, nLoai: ok.filter(r => r.pred.loai).length };
+}
+function renderColor() {
+  if (!colData) return;
+  const d = colData, st = colStats(d);
+  const tile = (k, v, sub = '') => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div>${sub ? `<div class="k">${sub}</div>` : ''}</div>`;
+  const err = d.filter(r => r.feat?.error).length;
+  $('#colCards').innerHTML =
+    tile('Ảnh đã phân tích', `${st.ok.length}<small>/${d.length}</small>`, err ? `${err} ảnh không phân tích được` : '') +
+    tile('Mô hình xếp Nhận (0–2)', st.ok.length - st.nLoai) +
+    tile('Mô hình xếp Loại (3–4)', st.nLoai) +
+    tile('Khớp Nhận/Loại với người', st.withH.length ? pct(st.loaiOk, st.withH.length) : '–', `${st.loaiOk}/${st.withH.length} ảnh có độ đa số`) +
+    tile('Độ ước tính trùng đa số', st.withH.length ? pct(st.exact, st.withH.length) : '–', st.withH.length ? `lệch ≤ 1 độ: ${pct(st.near, st.withH.length)}` : 'chưa có ảnh được phân loại');
+  // chọn chỉ số cho biểu đồ
+  $('#colFeat').innerHTML = COL_FEATS.map(([k, l]) => `<button class="chip ${colFeat === k ? 'active' : ''}" data-k="${k}">${l}</button>`).join('');
+  $('#colFeat').querySelectorAll('.chip').forEach(c => c.onclick = () => { colFeat = c.dataset.k; renderColor(); });
+  renderColorChart(st.ok);
+  // bảng
+  const chips = [['all', 'Tất cả', d.length], ['loai', 'Mô hình xếp Loại', st.nLoai], ['diff', 'Khác người phân loại', st.withH.filter(r => r.pred.loai !== (r.human >= 3) || r.pred.grade !== r.human).length], ['err', 'Không phân tích được', err]];
+  if (!chips.some(c => c[0] === colFilter && c[2])) colFilter = 'all';
+  $('#colFilters').innerHTML = chips.filter(c => c[0] === 'all' || c[2]).map(([k, l, c]) => `<button class="chip ${colFilter === k ? 'active' : ''}" data-f="${k}">${l}<span class="c">${c}</span></button>`).join('');
+  $('#colFilters').querySelectorAll('.chip').forEach(c => c.onclick = () => { colFilter = c.dataset.f; renderColor(); });
+  let rows = d;
+  if (colFilter === 'loai') rows = d.filter(r => r.pred?.loai);
+  if (colFilter === 'diff') rows = d.filter(r => r.pred && r.human !== null && (r.pred.loai !== (r.human >= 3) || r.pred.grade !== r.human));
+  if (colFilter === 'err') rows = d.filter(r => r.feat?.error);
+  rows = [...rows].sort((a, b) => (b.pred?.pLoai ?? -1) - (a.pred?.pLoai ?? -1));
+  const blind = isShuffled();
+  $('#colRows').innerHTML = rows.length ? rows.slice(0, 500).map(r => {
+    const f = r.feat, p = r.pred;
+    const name = `<div class="cname"><img loading="lazy" src="${esc(urlOf(r.im))}" alt="" /><div><b>${blind ? 'Ảnh #' + r.im.id : esc(r.im.rel_path)}</b><div class="muted">${esc(r.batch)}</div></div></div>`;
+    if (!f) return `<tr><td>${name}</td><td colspan="10" class="muted">Đang phân tích…</td><td></td></tr>`;
+    if (f.error) return `<tr><td>${name}</td><td colspan="10" class="muted">${esc(f.error)}</td><td class="num"><span class="link" data-open="${r.im.batch_id}:${r.im.id}">Mở →</span></td></tr>`;
+    const hum = r.human === null ? (r.rs.length ? '<span class="muted" title="Các lựa chọn hoà nhau hoặc chỉ có độ 5">hoà</span>' : '<span class="muted">–</span>') : `<span class="gpill" data-g="${r.human}">${r.human}</span><small> (${r.rs.length})</small>`;
+    const agree = p && r.human !== null ? (p.loai === (r.human >= 3) ? (p.grade === r.human ? '<span class="ok" title="Trùng độ">✓</span>' : '<span class="ok half" title="Cùng Nhận/Loại, khác độ">≈</span>') : '<span class="bad" title="Khác Nhận/Loại">✗</span>') : '';
+    return `<tr>
+      <td>${name}</td>
+      <td><span class="swatch" style="background:rgb(${Math.round(f.R)},${Math.round(f.G)},${Math.round(f.B)})"></span>${esc(f.color)}</td>
+      <td class="num">${fmtN(f.L, 0)}</td><td class="num">${fmtN(f.a, 0)}</td><td class="num">${fmtN(f.b, 0)}</td><td class="num">${fmtN(f.C)}</td><td class="num">${fmtN(f.S, 0)}</td><td class="num">${fmtN(f.g_chrom, 3)}</td>
+      <td class="num">${p ? fmtN(p.pLoai * 100, 0) + '%' : '–'}</td>
+      <td>${p ? `<span class="verdict ${p.loai ? 'loai' : 'nhan'}">${p.loai ? 'Loại' : 'Nhận'}</span> <span class="gpill" data-g="${p.grade}" title="Độ ước tính (xác suất ${Math.round(p.gradeProb * 100)}%)">${p.grade}</span>` : '–'}</td>
+      <td class="num">${hum} ${agree}</td>
+      <td class="num"><span class="link" data-open="${r.im.batch_id}:${r.im.id}">Mở →</span></td></tr>`;
+  }).join('') + (rows.length > 500 ? `<tr><td colspan="12" class="muted empty-row">Hiện 500/${rows.length} ảnh – xuất CSV để xem hết</td></tr>` : '')
+    : '<tr><td colspan="12" class="muted empty-row">Không có ảnh</td></tr>';
+  $('#colRows').querySelectorAll('[data-open]').forEach(a => a.onclick = () => { const [b, i] = a.dataset.open.split(':').map(Number); openImageFromSummary(b, i); });
+}
+// biểu đồ điểm: trục ngang = độ đa số người phân loại chọn, trục dọc = chỉ số màu
+function renderColorChart(ok) {
+  const box = $('#colChart');
+  const val = r => colFeat === 'pLoai' ? r.pred.pLoai : r.feat[colFeat];
+  const pts = ok.filter(r => Number.isFinite(val(r)));
+  if (!pts.length) { box.innerHTML = '<div class="muted empty-row">Chưa có ảnh phân tích được</div>'; return; }
+  const cols = [0, 1, 2, 3, 4, 'none'], colName = c => c === 'none' ? 'Chưa có độ' : 'Độ ' + c;
+  const W = 760, H = 280, ml = 52, mr = 12, mt = 12, mb = 34, cw = (W - ml - mr) / cols.length;
+  let lo = Math.min(...pts.map(val)), hi = Math.max(...pts.map(val));
+  if (colFeat === 'pLoai') { lo = 0; hi = 1; }
+  if (hi - lo < 1e-9) { lo -= 1; hi += 1; }
+  const pad = (hi - lo) * 0.08; lo -= colFeat === 'pLoai' ? 0 : pad; hi += colFeat === 'pLoai' ? 0 : pad;
+  const y = v => mt + (H - mt - mb) * (1 - (v - lo) / (hi - lo));
+  const dec = colFeat === 'g_chrom' ? 3 : colFeat === 'pLoai' ? 2 : 0;
+  const ticks = Array.from({ length: 5 }, (_, i) => lo + (hi - lo) * i / 4);
+  let svg = ticks.map(t => `<line x1="${ml}" x2="${W - mr}" y1="${y(t)}" y2="${y(t)}" class="grid"/><text x="${ml - 6}" y="${y(t) + 4}" class="ax" text-anchor="end">${colFeat === 'pLoai' ? Math.round(t * 100) + '%' : t.toFixed(dec)}</text>`).join('');
+  if (colFeat === 'pLoai' && PlasmaColor.model) { const t = PlasmaColor.model.reject.threshold; svg += `<line x1="${ml}" x2="${W - mr}" y1="${y(t)}" y2="${y(t)}" class="thr"/><text x="${W - mr - 4}" y="${y(t) - 5}" class="ax" text-anchor="end">ngưỡng Loại ${Math.round(t * 100)}%</text>`; }
+  cols.forEach((c, ci) => {
+    const cx = ml + cw * (ci + 0.5);
+    const g = pts.filter(r => (r.human ?? 'none') === c);
+    svg += `<text x="${cx}" y="${H - 12}" class="ax" text-anchor="middle">${colName(c)} (${g.length})</text>`;
+    g.forEach((r, j) => {
+      const jit = ((r.im.id * 7919) % 100 / 100 - 0.5) * cw * 0.5;
+      svg += `<circle cx="${cx + jit}" cy="${y(val(r))}" r="4.5" class="pt ${r.pred.loai ? 'loai' : 'nhan'}" data-open="${r.im.batch_id}:${r.im.id}"><title>${esc(isShuffled() ? 'Ảnh #' + r.im.id : r.im.rel_path)} – ${COL_FEATS.find(f => f[0] === colFeat)[1]}: ${colFeat === 'pLoai' ? Math.round(val(r) * 100) + '%' : val(r).toFixed(dec || 1)} · mô hình: ${r.pred.loai ? 'Loại' : 'Nhận'}, độ ${r.pred.grade}</title></circle>`;
+    });
+    if (g.length) { const m = g.map(val).sort((a, b) => a - b), med = m.length % 2 ? m[m.length >> 1] : (m[m.length / 2 - 1] + m[m.length / 2]) / 2; svg += `<line x1="${cx - cw * 0.32}" x2="${cx + cw * 0.32}" y1="${y(med)}" y2="${y(med)}" class="med"><title>Trung vị: ${colFeat === 'pLoai' ? Math.round(med * 100) + '%' : med.toFixed(dec || 1)}</title></line>`; }
+  });
+  box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="strip">${svg}</svg>
+    <div class="lgs"><span><i class="pt-l nhan"></i>Mô hình xếp Nhận</span><span><i class="pt-l loai"></i>Mô hình xếp Loại</span><span><i class="med-l"></i>Trung vị</span><span class="muted">Bấm vào điểm để mở ảnh</span></div>`;
+  box.querySelectorAll('[data-open]').forEach(a => a.onclick = () => { const [b, i] = a.dataset.open.split(':').map(Number); openImageFromSummary(b, i); });
+}
+$('#colBatch').onchange = () => refreshColor();
+$('#colRefresh').onclick = () => { colorCache.clear(); refreshColor(); };
+$('#colExport').onclick = () => {
+  if (!colData) return;
+  const e = v => { let s = v == null ? '' : String(v); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const head = ['Lo', 'Ten_Anh', 'Mau_Plasma', 'L', 'a', 'b', 'C', 'h', 'R', 'G', 'B', 'S', 'r_chrom', 'g_chrom', 'Ti_le_plasma', 'So_pixel', 'P_Loai', 'Mo_hinh', 'Do_uoc_tinh', 'Do_da_so_nguoi', 'So_nguoi_phan_loai', 'Loi'];
+  const lines = [head.join(',')].concat(colData.map(r => {
+    const f = r.feat || {}, p = r.pred;
+    return [r.batch, r.im.rel_path, f.color, fmtN(f.L, 0), fmtN(f.a, 0), fmtN(f.b, 0), fmtN(f.C, 2), fmtN(f.h, 1), fmtN(f.R, 0), fmtN(f.G, 0), fmtN(f.B, 0), fmtN(f.S, 0), fmtN(f.r_chrom, 4), fmtN(f.g_chrom, 4), fmtN(f.ratio, 3), f.n,
+      p ? p.pLoai.toFixed(3) : '', p ? (p.loai ? 'Loại' : 'Nhận') : '', p ? p.grade : '', r.human ?? '', r.rs.length, f.error || ''].map(v => e(v === '–' ? '' : v)).join(',');
+  }));
+  downloadBlob(new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' }), `phan-tich-mau-${new Date().toISOString().slice(0, 10)}.csv`);
+};

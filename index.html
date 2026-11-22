@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath d=%27M16 2C16 2 6 14 6 20a10 10 0 0 0 20 0C26 14 16 2 16 2z%27 fill=%27%23e9a93a%27/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="style.css?v=24" />
+  <link rel="stylesheet" href="style.css?v=25" />
 </head>
 <body>
   <!-- ========== AUTH ========== -->
@@ -64,6 +64,7 @@
       <nav class="nav-tabs">
         <button class="nav-tab active" data-view="grade">Phân loại</button>
         <button class="nav-tab" data-view="summary">Tổng kết</button>
+        <button class="nav-tab" data-view="color">Phân tích màu</button>
       </nav>
       <div class="live" id="liveStatus" title="Trạng thái đồng bộ"><i></i><span>Đang kết nối…</span></div>
       <div class="user">
@@ -222,6 +223,33 @@
             </div>
           </div>
         </div>
+        <section class="summary hidden" id="colorPanel">
+          <div class="ws-head">
+            <div class="ws-title"><h2 class="admin-title">Phân tích màu huyết tương</h2>
+              <span class="muted" id="colModelInfo">Mô hình màu tự phân loại từng ảnh và so với người phân loại</span></div>
+            <div class="ws-actions">
+              <select id="colBatch" class="sum-select"></select>
+              <button class="btn outline sm" id="colRefresh">↻ Phân tích lại</button>
+              <button class="btn outline sm" id="colExport">Xuất CSV</button>
+            </div>
+          </div>
+          <div id="colBody">
+            <div class="col-progress hidden" id="colProgress"><span id="colProgText"></span><div class="bar"><i id="colProgBar"></i></div></div>
+            <div class="cards" id="colCards"></div>
+            <div class="panel">
+              <div class="panel-head"><h3>Chỉ số màu theo độ người phân loại chọn</h3>
+                <div class="col-feat" id="colFeat"></div></div>
+              <div class="col-chart" id="colChart"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h3>Từng ảnh</h3><div class="filters" id="colFilters"></div></div>
+              <div class="table-wrap"><table class="users col-table">
+                <thead><tr><th>Ảnh</th><th>Màu plasma</th><th class="num" title="Độ sáng L* (thang OpenCV 0–255)">L</th><th class="num" title="a* (+128): sắc đỏ">a</th><th class="num" title="b* (+128): sắc vàng">b</th><th class="num" title="Độ đậm màu (chroma)">C</th><th class="num" title="Độ bão hoà HSV">S</th><th class="num" title="G/(R+G+B)">g_chrom</th><th class="num" title="Xác suất Loại (độ 3–4) theo hồi quy logistic">P(Loại)</th><th>Mô hình</th><th class="num">Người phân loại</th><th></th></tr></thead>
+                <tbody id="colRows"></tbody>
+              </table></div>
+            </div>
+          </div>
+        </section>
         <section class="summary hidden" id="summaryPanel">
           <div class="ws-head">
             <div class="ws-title"><h2 class="admin-title">Tổng kết phân loại</h2>
@@ -318,8 +346,9 @@
   </div>
 
   <script src="vendor/supabase.js?v=2.119.2" integrity="sha384-A97u3Qnt9GZHURO9YJZRe7VQgGUeFzcv6I1oIGnUTxQrCxnpQMwR0/G8F2zt9abZ"></script>
-  <script src="config.js?v=24"></script>
-  <script src="seg.js?v=24"></script>
-  <script src="app.js?v=24"></script>
+  <script src="config.js?v=25"></script>
+  <script src="seg.js?v=25"></script>
+  <script src="color.js?v=25"></script>
+  <script src="app.js?v=25"></script>
 </body>
 </html>
