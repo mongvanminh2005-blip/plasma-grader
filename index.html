@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath d=%27M16 2C16 2 6 14 6 20a10 10 0 0 0 20 0C26 14 16 2 16 2z%27 fill=%27%23e9a93a%27/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="style.css?v=28" />
+  <link rel="stylesheet" href="style.css?v=29" />
 </head>
 <body>
   <!-- ========== AUTH ========== -->
@@ -228,7 +228,11 @@
             <div class="ws-title"><h2 class="admin-title">Phân tích màu huyết tương</h2>
               <span class="muted" id="colModelInfo">Mô hình màu tự phân loại từng ảnh và so với người phân loại</span></div>
             <div class="ws-actions">
+              <div class="mode-tg" id="colMode" title="Phân tích toàn bộ lô hay chỉ một ảnh">
+                <button data-m="batch">Cả lô</button><button data-m="one">1 ảnh</button>
+              </div>
               <select id="colBatch" class="sum-select"></select>
+              <select id="colImage" class="sum-select hidden" title="Chọn ảnh cần phân tích"></select>
               <button class="btn outline sm" id="colRefresh">↻ Phân tích lại</button>
               <button class="btn outline sm" id="colExport">Xuất CSV</button>
             </div>
@@ -245,6 +249,8 @@
           </div>
           <div id="colBody">
             <div class="col-progress hidden" id="colProgress"><span id="colProgText"></span><div class="bar"><i id="colProgBar"></i></div></div>
+            <div class="col-one hidden" id="colOne"></div>
+            <div id="colBatchView">
             <div class="cards" id="colCards"></div>
             <div class="panel">
               <div class="panel-head"><h3>Chỉ số màu theo độ người phân loại chọn</h3>
@@ -257,6 +263,7 @@
                 <thead><tr><th>Ảnh</th><th>Màu plasma</th><th class="num" title="Độ sáng L* (thang OpenCV 0–255)">L</th><th class="num" title="a* (+128): sắc đỏ">a</th><th class="num" title="b* (+128): sắc vàng">b</th><th class="num" title="Độ đậm màu (chroma)">C</th><th class="num" title="Độ bão hoà HSV">S</th><th class="num" title="G/(R+G+B)">g_chrom</th><th class="num" title="Xác suất Loại (độ 3–4) theo hồi quy logistic">P(Loại)</th><th>Mô hình</th><th class="num">Người phân loại</th><th></th></tr></thead>
                 <tbody id="colRows"></tbody>
               </table></div>
+            </div>
             </div>
           </div>
         </section>
@@ -356,9 +363,9 @@
   </div>
 
   <script src="vendor/supabase.js?v=2.119.2" integrity="sha384-A97u3Qnt9GZHURO9YJZRe7VQgGUeFzcv6I1oIGnUTxQrCxnpQMwR0/G8F2zt9abZ"></script>
-  <script src="config.js?v=28"></script>
-  <script src="seg.js?v=28"></script>
-  <script src="color.js?v=28"></script>
-  <script src="app.js?v=28"></script>
+  <script src="config.js?v=29"></script>
+  <script src="seg.js?v=29"></script>
+  <script src="color.js?v=29"></script>
+  <script src="app.js?v=29"></script>
 </body>
 </html>

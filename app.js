@@ -1912,7 +1912,33 @@ function majorityGrade(rs) {
   if (!g.length) return null;
   const m = modeOf(g); return m.length === 1 ? m[0] : null;   // hoà thì không tính
 }
+let colMode = localStorage.getItem('pg-colmode') || 'batch';
+async function analyzeRow(r) {
+  try {
+    if (RAW_EXT.test(r.im.storage_path)) r.feat = { error: 'Ảnh RAW chưa chuyển JPEG' };
+    else {
+      const res = await fetch(urlOf(r.im)); if (!res.ok) throw new Error('Không tải được ảnh');
+      const bmp = await createImageBitmap(await res.blob());
+      let regions = r.im.regions;
+      if (!regions?.length) { await ensureModel(); const job = colSegLock.then(() => TubeSeg.run(bmp)); colSegLock = job.catch(() => {}); regions = await job; }   // ảnh chưa khoanh: AI khoanh tạm để lấy màu (không lưu)
+      r.feat = regions?.length ? PlasmaColor.analyze(bmp, regions) : { error: 'AI không tìm thấy ống nghiệm' }; bmp.close();
+      if (r.feat && !r.feat.error) r.feat.regions = regions;
+    }
+  } catch (e) { r.feat = { error: e.message }; }
+  colorCache.set(r.key, r.feat); r.pred = PlasmaColor.predict(r.feat);
+}
+const rowKey = im => im.id + ':' + JSON.stringify(im.regions || '').length;
+function setColMode(m) {
+  colMode = m; localStorage.setItem('pg-colmode', m);
+  $('#colMode').querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.m === m));
+  $('#colImage').classList.toggle('hidden', m !== 'one');
+  $('#colOne').classList.toggle('hidden', m !== 'one');
+  $('#colBatchView').classList.toggle('hidden', m === 'one');
+  $('#colRefresh').textContent = m === 'one' ? '↻ Phân tích lại ảnh này' : '↻ Phân tích lại cả lô';
+}
+$('#colMode').querySelectorAll('button').forEach(b => b.onclick = () => { if (b.dataset.m !== colMode) { setColMode(b.dataset.m); refreshColor(); } });
 async function refreshColor() {
+  setColMode(colMode);
   const run = ++colRun, sel = $('#colBatch');
   try {
     const model = await PlasmaColor.loadModel();
@@ -1927,10 +1953,11 @@ async function refreshColor() {
     const byImg = new Map();
     ratings.forEach(r => { if (!byImg.has(r.image_id)) byImg.set(r.image_id, []); byImg.get(r.image_id).push(r); });
     await signUrls(images.filter(i => !RAW_EXT.test(i.storage_path)));
-    colData = images.map(im => ({ im, batch: bname.get(im.batch_id) || '', rs: byImg.get(im.id) || [], human: majorityGrade(byImg.get(im.id) || []), feat: null, pred: null }));
+    colData = images.map(im => ({ im, batch: bname.get(im.batch_id) || '', rs: byImg.get(im.id) || [], human: majorityGrade(byImg.get(im.id) || []), feat: null, pred: null, key: rowKey(im) }));
+    if (colMode === 'one') return colOneRun(run);
     renderColor();
     // phân tích (4 ảnh cùng lúc), hiện dần kết quả
-    const todo = colData.filter(r => { const k = r.im.id + ':' + JSON.stringify(r.im.regions || '').length; r.key = k; if (colorCache.has(k)) { r.feat = colorCache.get(k); r.pred = PlasmaColor.predict(r.feat); return false; } return true; });
+    const todo = colData.filter(r => { const k = r.key; if (colorCache.has(k)) { r.feat = colorCache.get(k); r.pred = PlasmaColor.predict(r.feat); return false; } return true; });
     let done = colData.length - todo.length;
     const prog = () => { $('#colProgress').classList.toggle('hidden', done >= colData.length); $('#colProgText').textContent = `Đang phân tích màu ${done}/${colData.length} ảnh…`; $('#colProgBar').style.width = (colData.length ? done / colData.length * 100 : 0) + '%'; };
     prog();
@@ -1939,17 +1966,7 @@ async function refreshColor() {
     const worker = async () => {
       while (k < todo.length && run === colRun) {
         const r = todo[k++];
-        try {
-          if (RAW_EXT.test(r.im.storage_path)) r.feat = { error: 'Ảnh RAW chưa chuyển JPEG' };
-          else {
-            const res = await fetch(urlOf(r.im)); if (!res.ok) throw new Error('Không tải được ảnh');
-            const bmp = await createImageBitmap(await res.blob());
-            let regions = r.im.regions;
-            if (!regions?.length) { await ensureModel(); const job = colSegLock.then(() => TubeSeg.run(bmp)); colSegLock = job.catch(() => {}); regions = await job; }   // ảnh chưa khoanh: AI khoanh tạm để lấy màu (không lưu)
-            r.feat = regions?.length ? PlasmaColor.analyze(bmp, regions) : { error: 'AI không tìm thấy ống nghiệm' }; bmp.close();
-          }
-        } catch (e) { r.feat = { error: e.message }; }
-        colorCache.set(r.key, r.feat); r.pred = PlasmaColor.predict(r.feat);
+        await analyzeRow(r);
         done++; prog(); redraw();
       }
     };
@@ -2042,7 +2059,56 @@ function renderColorChart(ok) {
   box.querySelectorAll('[data-open]').forEach(a => a.onclick = () => { const [b, i] = a.dataset.open.split(':').map(Number); openImageFromSummary(b, i); });
 }
 $('#colBatch').onchange = () => refreshColor();
-$('#colRefresh').onclick = () => { colorCache.clear(); refreshColor(); };
+$('#colRefresh').onclick = () => {
+  if (colMode === 'one') { const id = Number($('#colImage').value); [...colorCache.keys()].filter(k => k.startsWith(id + ':')).forEach(k => colorCache.delete(k)); }
+  else colorCache.clear();
+  refreshColor();
+};
+$('#colImage').onchange = () => colOneRun(colRun);
+// ---- chế độ 1 ảnh ----
+function colOneRun(run) {
+  const sel = $('#colImage'), blind = isShuffled();
+  const list = blind ? [...colData].sort((a, b) => hash32(state.user.id + ':' + a.im.id) - hash32(state.user.id + ':' + b.im.id)) : colData;
+  const cur = Number(sel.value);
+  sel.innerHTML = list.length ? list.map((r, i) => `<option value="${r.im.id}">${blind ? `Ảnh ${i + 1}/${list.length}` : esc(r.im.rel_path)}${$('#colBatch').value ? '' : ' · ' + esc(r.batch)}</option>`).join('') : '<option value="">Không có ảnh</option>';
+  const pick = [cur, state.currentId].find(id => list.some(r => r.im.id === id)) ?? list[0]?.im.id;
+  if (pick) sel.value = String(pick);
+  const r = colData.find(x => x.im.id === Number(sel.value));
+  $('#colProgress').classList.add('hidden');
+  if (!r) { $('#colOne').innerHTML = '<div class="muted empty-row">Lô này chưa có ảnh</div>'; return; }
+  const label = blind ? `Ảnh ${list.indexOf(r) + 1}/${list.length}` : r.im.rel_path;
+  const draw = () => { if (run === colRun) $('#colOne').innerHTML = `<div class="quick-list one">${colResultCard(r, label)}</div>`; $('#colOne').querySelector('[data-open]')?.addEventListener('click', () => openImageFromSummary(r.im.batch_id, r.im.id)); };
+  if (colorCache.has(r.key)) { r.feat = colorCache.get(r.key); r.pred = PlasmaColor.predict(r.feat); draw(); return; }
+  r.feat = null; draw();
+  analyzeRow(r).then(draw);
+}
+// thẻ kết quả dùng chung cho "1 ảnh" và "Tải ảnh lên"
+function resultCardHtml({ name, sub = '', url, poly, feat, pred, error, step, extra = '' }) {
+  const head = `<div class="qimg">${url ? `<img src="${esc(url)}" alt="" />${poly ? `<svg viewBox="0 0 1 1" preserveAspectRatio="none"><polygon points="${poly}" /></svg>` : ''}` : '<div class="qwait">…</div>'}</div>`;
+  const nm = `<div class="qname">${esc(name)}</div>${sub ? `<div class="muted qsub">${esc(sub)}</div>` : ''}`;
+  if (error) return `<div class="qcard">${head}<div class="qbody">${nm}<div class="qerr">⚠ ${esc(error)}</div>${extra}</div></div>`;
+  if (!pred) return `<div class="qcard">${head}<div class="qbody">${nm}<div class="muted">${esc(step || 'Đang phân tích…')}</div></div></div>`;
+  const m = PlasmaColor.model;
+  const bars = pred.probs.map((v, i) => `<div class="qp"><span>Độ ${m.grade.classes[i]}</span><div class="qbar"><i class="cg${m.grade.classes[i]}" style="width:${v * 100}%"></i></div><b>${Math.round(v * 100)}%</b></div>`).join('');
+  return `<div class="qcard">${head}<div class="qbody">${nm}
+    <div class="qverdict ${pred.loai ? 'loai' : 'nhan'}">${pred.loai ? 'LOẠI' : 'NHẬN'}<small>${pred.loai ? 'đục rõ / nặng (độ 3–4)' : 'trong / đục nhẹ–vừa (độ 0–2)'}</small></div>
+    <div class="qline">Xác suất Loại <b>${Math.round(pred.pLoai * 100)}%</b> <span class="muted">(ngưỡng ${Math.round(m.reject.threshold * 100)}%)</span></div>
+    <div class="qline">Độ ước tính <span class="gpill" data-g="${pred.grade}">${pred.grade}</span> <span class="muted">${GRADES.find(g => g.g === pred.grade)?.label || ''}</span></div>
+    <div class="qprobs">${bars}</div>
+    <div class="qline"><span class="swatch" style="background:rgb(${Math.round(feat.R)},${Math.round(feat.G)},${Math.round(feat.B)})"></span>${esc(feat.color)} <span class="muted">· a ${Math.round(feat.a)} · b ${Math.round(feat.b)} · C ${feat.C.toFixed(1)} · g_chrom ${feat.g_chrom.toFixed(3)}</span></div>
+    ${extra}</div></div>`;
+}
+const plasmaPoly = regions => { const pl = (regions || []).filter(x => x.name === 'plasma').sort((a, b) => (b.conf || 0) - (a.conf || 0))[0]; return pl ? pl.pts.map(([x, y]) => `${x},${y}`).join(' ') : ''; };
+function colResultCard(r, label) {
+  const hum = r.human === null
+    ? (r.rs.length ? 'Người phân loại: chưa có độ đa số' : 'Chưa có ai phân loại ảnh này')
+    : `Người phân loại (đa số, ${r.rs.length} người): <span class="gpill" data-g="${r.human}">${r.human}</span>${r.pred ? (r.pred.loai === (r.human >= 3) ? (r.pred.grade === r.human ? ' <span class="okc">✓ trùng</span>' : ' <span class="halfc">≈ cùng Nhận/Loại</span>') : ' <span class="badc">✗ khác Nhận/Loại</span>') : ''}`;
+  return resultCardHtml({
+    name: label, sub: r.batch, url: urlOf(r.im),
+    poly: plasmaPoly(r.feat?.regions || r.im.regions), feat: r.feat, pred: r.pred, error: r.feat?.error,
+    extra: `<div class="qline">${hum}</div><div><button class="link" data-open="1">Mở ảnh ở tab Phân loại →</button></div>`,
+  });
+}
 $('#colExport').onclick = () => {
   if (!colData) return;
   const e = v => { let s = v == null ? '' : String(v); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
@@ -2063,21 +2129,7 @@ function quickRender() {
   const done = quickItems.filter(q => q.res || q.error);
   const nL = done.filter(q => q.res?.pred?.loai).length;
   $('#quickCount').textContent = `${done.length}/${quickItems.length} ảnh · Nhận ${done.length - nL - done.filter(q => q.error).length} · Loại ${nL}`;
-  $('#quickList').innerHTML = quickItems.map(q => {
-    const head = `<div class="qimg">${q.url ? `<img src="${q.url}" alt="" />${q.poly ? `<svg viewBox="0 0 1 1" preserveAspectRatio="none"><polygon points="${q.poly}" /></svg>` : ''}` : '<div class="qwait">…</div>'}</div>`;
-    if (q.error) return `<div class="qcard">${head}<div class="qbody"><div class="qname">${esc(q.name)}</div><div class="qerr">⚠ ${esc(q.error)}</div></div></div>`;
-    if (!q.res) return `<div class="qcard">${head}<div class="qbody"><div class="qname">${esc(q.name)}</div><div class="muted">${esc(q.step || 'Đang chờ…')}</div></div></div>`;
-    const f = q.res.feat, p = q.res.pred;
-    const bars = p.probs.map((v, i) => `<div class="qp"><span>Độ ${PlasmaColor.model.grade.classes[i]}</span><div class="qbar"><i class="cg${PlasmaColor.model.grade.classes[i]}" style="width:${v * 100}%"></i></div><b>${Math.round(v * 100)}%</b></div>`).join('');
-    return `<div class="qcard">${head}<div class="qbody">
-      <div class="qname">${esc(q.name)}</div>
-      <div class="qverdict ${p.loai ? 'loai' : 'nhan'}">${p.loai ? 'LOẠI' : 'NHẬN'}<small>${p.loai ? 'đục rõ / nặng (độ 3–4)' : 'trong / đục nhẹ–vừa (độ 0–2)'}</small></div>
-      <div class="qline">Xác suất Loại <b>${Math.round(p.pLoai * 100)}%</b> <span class="muted">(ngưỡng ${Math.round(PlasmaColor.model.reject.threshold * 100)}%)</span></div>
-      <div class="qline">Độ ước tính <span class="gpill" data-g="${p.grade}">${p.grade}</span> <span class="muted">${GRADES.find(g => g.g === p.grade)?.label || ''}</span></div>
-      <div class="qprobs">${bars}</div>
-      <div class="qline"><span class="swatch" style="background:rgb(${Math.round(f.R)},${Math.round(f.G)},${Math.round(f.B)})"></span>${esc(f.color)} <span class="muted">· a ${Math.round(f.a)} · b ${Math.round(f.b)} · C ${f.C.toFixed(1)} · g_chrom ${f.g_chrom.toFixed(3)}</span></div>
-    </div></div>`;
-  }).join('');
+  $('#quickList').innerHTML = quickItems.map(q => resultCardHtml({ name: q.name, url: q.url, poly: q.poly, feat: q.res?.feat, pred: q.res?.pred, error: q.error, step: q.step || 'Đang chờ…' })).join('');
 }
 async function quickAdd(files) {
   files = [...files].filter(f => RAW_EXT.test(f.name) || f.type.startsWith('image/'));
