@@ -165,6 +165,7 @@ async function startApp(user) {
   connectLive();
   await loadBatches();
   const saved = Number(localStorage.getItem('batchId'));
+  if (await openFromHash()) return;
   const first = state.batches.find(b => b.id === saved) || state.batches[0];
   if (first) openBatch(first.id);
 }
@@ -197,6 +198,14 @@ function connectLive() {
         if (img && (img.grade !== d.grade || img.note !== d.note)) {
           Object.assign(img, { grade: d.grade, note: d.note, graded_at: d.graded_at });
           renderAll(); if (d.image_id === state.currentId) showCurrent();
+        }
+      } else {
+        const id = d?.image_id ?? p.old?.image_id, img = state.images.find(i => i.id === id);
+        if (img && p.eventType === 'DELETE') refreshCurrent();
+        else if (img && d) {
+          const before = isDiff(img);
+          if (d.grade === null) img.others.delete(d.user_id); else img.others.set(d.user_id, d.grade);
+          if (before !== isDiff(img) || id === state.currentId) { renderAll(); if (id === state.currentId) renderDiffBar(img); }
         }
       }
       refreshBatches();
@@ -280,12 +289,16 @@ async function fetchImages(batchId) {
   const imgs = await fetchAll(() => sb.from('images')
     .select('id, batch_id, user_id, filename, rel_path, storage_path, regions, regions_source, regions_at')
     .eq('batch_id', batchId).is('deleted_at', null).order('rel_path').order('id'));
-  // điểm của chính mình (mỗi người có điểm riêng)
-  const mine = await fetchAll(() => sb.from('ratings')
-    .select('image_id, grade, note, graded_at, images!inner(batch_id)')
-    .eq('user_id', state.user.id).eq('images.batch_id', batchId).order('image_id'));
-  const byId = new Map(mine.map(r => [r.image_id, r]));
-  imgs.forEach(i => { const r = byId.get(i.id); i.grade = r?.grade ?? null; i.note = r?.note ?? ''; i.graded_at = r?.graded_at ?? null; });
+  // điểm của mọi người trong lô (mỗi người có điểm riêng)
+  const all = await fetchAll(() => sb.from('ratings')
+    .select('image_id, user_id, grade, note, graded_at, images!inner(batch_id)')
+    .eq('images.batch_id', batchId).order('image_id').order('user_id'));
+  const uid = state.user.id, byId = new Map(), others = new Map();
+  all.forEach(r => {
+    if (r.user_id === uid) byId.set(r.image_id, r);
+    else if (r.grade !== null) { if (!others.has(r.image_id)) others.set(r.image_id, new Map()); others.get(r.image_id).set(r.user_id, r.grade); }
+  });
+  imgs.forEach(i => { const r = byId.get(i.id); i.grade = r?.grade ?? null; i.note = r?.note ?? ''; i.graded_at = r?.graded_at ?? null; i.others = others.get(i.id) || new Map(); });
   await signUrls(imgs);
   return orderImages(imgs);
 }
@@ -326,9 +339,12 @@ function closeBatch() {
 // ---------- workspace rendering ----------
 const batch = () => state.batches.find(b => b.id === state.batchId);
 const current = () => state.images.find(i => i.id === state.currentId);
+// ảnh lệch: mình đã phân loại, có người khác phân loại, và các kết quả không giống nhau
+const isDiff = i => i.grade !== null && !!i.others?.size && [...i.others.values()].some(g => g !== i.grade);
 function view() {
   const f = state.filter;
   if (f === 'all') return state.images;
+  if (f === 'diff') return state.images.filter(isDiff);
   if (f === 'none') return state.images.filter(i => i.grade === null);
   return state.images.filter(i => i.grade === Number(f));
 }
@@ -360,9 +376,11 @@ function renderAll() {
     <div class="d"><div class="top"><span>Độ ${g}</span><b>${counts[k]}</b></div>
     <div class="track"><i data-g="${g}" style="width:${counts[k] / max * 100}%"></i></div></div>`).join('');
 
-  const chips = [['all', 'Tất cả', total], ['none', 'Chưa phân loại', total - graded], ...GRADES.map(({ g }, k) => [String(g), 'Độ ' + g, counts[k]])];
+  const nDiff = state.images.filter(isDiff).length;
+  if (state.filter === 'diff' && !nDiff) state.filter = 'all';
+  const chips = [['all', 'Tất cả', total], ['none', 'Chưa phân loại', total - graded], ...(nDiff ? [['diff', '⚠ Lệch nhau', nDiff]] : []), ...GRADES.map(({ g }, k) => [String(g), 'Độ ' + g, counts[k]])];
   $('#filters').innerHTML = chips.map(([k, l, c]) =>
-    `<button class="chip ${state.filter === k ? 'active' : ''}" data-f="${k}">${l}<span class="c">${c}</span></button>`).join('');
+    `<button class="chip ${k === 'diff' ? 'diffchip' : ''} ${state.filter === k ? 'active' : ''}" data-f="${k}" ${k === 'diff' ? 'title="Ảnh bạn đã phân loại mà người khác chọn độ khác"' : ''}>${l}<span class="c">${c}</span></button>`).join('');
   $('#filters').querySelectorAll('.chip').forEach(c => c.onclick = () => {
     state.filter = c.dataset.f;
     const v = view();
@@ -378,7 +396,7 @@ function renderThumbs() {
   const v = view(), box = $('#thumbs');
   if (!v.length) { box.innerHTML = '<div class="none-msg">Không có ảnh nào trong bộ lọc này</div>'; return; }
   box.innerHTML = v.map(i => `
-    <div class="thumb ${i.id === state.currentId ? 'current' : ''} ${RAW_EXT.test(i.storage_path) ? 'raw' : ''} ${state.pick?.has(i.id) ? 'picked' : ''}" data-id="${i.id}" ${isShuffled() ? '' : `title="${esc(i.rel_path)}"`}>
+    <div class="thumb ${i.id === state.currentId ? 'current' : ''} ${RAW_EXT.test(i.storage_path) ? 'raw' : ''} ${isDiff(i) ? 'diff' : ''} ${state.pick?.has(i.id) ? 'picked' : ''}" data-id="${i.id}" ${isShuffled() ? '' : `title="${esc(i.rel_path)}"`}>
       <img loading="lazy" src="${esc(urlOf(i))}" alt="" />
       ${state.pick ? (canDelete(i) ? `<input type="checkbox" class="tpick" ${state.pick.has(i.id) ? 'checked' : ''} />` : '') : (canDelete(i) ? `<button class="del" data-del="${i.id}" title="Xoá ảnh">✕</button>` : '')}
       ${i.grade === null ? '<span class="badge none">–</span>' : `<span class="badge" data-g="${i.grade}">${i.grade}</span>`}
@@ -404,6 +422,7 @@ function showCurrent() {
   if (document.activeElement !== $('#note')) $('#note').value = img.note || '';
   setSave(img.graded_at ? 'ok' : '', img.graded_at ? 'Đã lưu lúc ' + timeStr(img.graded_at) : 'Chưa phân loại');
   renderGradeSelection();
+  renderDiffBar(img);
   $('#delImg').classList.toggle('hidden', !canDelete(img));
   if (seg.shownId !== img.id) { seg.shownId = img.id; seg.sel = -1; seg.drawing = null; seg.pan = [0, 0]; if (seg.zoomFree) { seg.zoomFree = false; seg.zoomMode = sessionStorage.getItem('pg-zoom') || '1'; } updateDrawBtn(); }
   renderOverlay();
@@ -411,6 +430,34 @@ function showCurrent() {
   maybeAutoSeg();
 }
 
+function renderDiffBar(img) {
+  const bar = $('#diffBar');
+  if (!img || !isDiff(img)) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
+  const list = state.images.filter(isDiff), k = list.indexOf(img);
+  const who = [[state.user.id, img.grade], ...img.others].map(([u, g]) =>
+    `<span class="dchip" data-g="${g}">${u === state.user.id ? 'Bạn' : esc(nameOfUser(u))}: <b>${g}</b></span>`).join('');
+  bar.innerHTML = `<span class="dmsg">⚠ Ảnh này được phân loại khác nhau</span>${who}
+    <span class="dact">${list.length > 1 ? `<button class="link" id="diffNext">Ảnh lệch tiếp theo (${k + 1}/${list.length}) →</button>` : ''}
+    <button class="link" id="diffLink" title="Sao chép đường dẫn mở thẳng tới ảnh này">🔗 Sao chép đường dẫn</button></span>`;
+  bar.classList.remove('hidden');
+  $('#diffNext')?.addEventListener('click', () => select(list[(k + 1) % list.length].id));
+  $('#diffLink').onclick = () => copyImageLink(img);
+}
+function imageLink(img) { return `${location.origin}${location.pathname}#lo=${img.batch_id}&anh=${img.id}`; }
+async function copyImageLink(img) {
+  const url = imageLink(img);
+  try { await navigator.clipboard.writeText(url); toast('Đã sao chép đường dẫn tới ảnh'); }
+  catch { prompt('Đường dẫn tới ảnh:', url); }
+}
+// mở ảnh từ đường dẫn #lo=..&anh=..
+async function openFromHash() {
+  const m = /lo=(\d+)&anh=(\d+)/.exec(location.hash); if (!m) return false;
+  history.replaceState(null, '', location.pathname + location.search);
+  try { await openImageFromSummary(Number(m[1]), Number(m[2])); } catch (e) { toast(e.message); }
+  if (!state.images.some(i => i.id === Number(m[2]))) toast('Không tìm thấy ảnh trong đường dẫn (có thể đã bị xoá hoặc bạn không có quyền xem)');
+  return true;
+}
+window.addEventListener('hashchange', () => state.user && openFromHash());
 function select(id) {
   state.currentId = id;
   showCurrent();

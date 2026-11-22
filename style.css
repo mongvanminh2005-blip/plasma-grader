@@ -479,3 +479,12 @@ table.matrix td.self, table.matrix td.na { background: #f3f5f7; color: var(--mut
 
 .thumbs-head { justify-content: space-between; }
 .shuffle-btn.on { color: var(--accent); font-weight: 600; }
+
+/* ---------- Ảnh phân loại lệch nhau ---------- */
+.diff-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 9px 18px; background: #fff6e6; border-bottom: 1px solid #f3dcae; font-size: 13px; }
+.diff-bar .dmsg { color: #8a5a00; font-weight: 600; margin-right: 4px; }
+.diff-bar .dchip { background: #fff; border: 1px solid #f0d9a8; border-radius: 8px; padding: 2px 8px; color: var(--ink); }
+.diff-bar .dact { margin-left: auto; display: flex; gap: 14px; }
+.thumb.diff::after { content: "⚠"; position: absolute; top: 3px; left: 4px; font-size: 12px; background: #fff3d6; color: #a86a00; border-radius: 6px; padding: 0 4px; line-height: 16px; }
+.chip.diffchip { border-color: #f0c674; color: #8a5a00; }
+.chip.diffchip.active { background: #b7791f; border-color: #b7791f; color: #fff; }
