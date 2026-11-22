@@ -521,3 +521,29 @@ table.matrix td.self, table.matrix td.na { background: #f3f5f7; color: var(--mut
 .col-table .ok { color: #15803d; font-weight: 700; margin-left: 4px; }
 .col-table .ok.half { color: #b7791f; }
 .col-table .bad { color: #c2410c; font-weight: 700; margin-left: 4px; }
+
+/* ---------- Phân loại nhanh ---------- */
+.panel.quick { margin-bottom: 16px; }
+.quick-drop { margin: 14px 16px; border: 2px dashed var(--line); border-radius: 14px; padding: 22px; text-align: center; display: grid; gap: 6px; cursor: pointer; transition: .15s; }
+.quick-drop:hover, .quick-drop.over { border-color: var(--accent); background: var(--accent-soft); }
+.quick-head { display: flex; justify-content: space-between; padding: 0 16px 8px; font-size: 13px; color: var(--muted); }
+.quick-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; padding: 0 16px 16px; }
+.quick-list:empty { display: none; }
+.qcard { display: flex; gap: 12px; border: 1px solid var(--line); border-radius: 12px; padding: 10px; background: #fff; }
+.qimg { position: relative; width: 84px; flex: none; align-self: flex-start; }
+.qimg img { width: 100%; display: block; border-radius: 8px; background: #111; }
+.qimg svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.qimg polygon { fill: none; stroke: #22c55e; stroke-width: .012; vector-effect: non-scaling-stroke; stroke-width: 1.6; }
+.qwait { height: 120px; display: grid; place-items: center; background: #f3f5f7; border-radius: 8px; color: var(--muted); }
+.qbody { flex: 1; min-width: 0; display: grid; gap: 5px; align-content: start; font-size: 13px; }
+.qname { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qerr { color: #b42318; }
+.qverdict { font-size: 20px; font-weight: 800; letter-spacing: .02em; display: flex; align-items: baseline; gap: 8px; }
+.qverdict small { font-size: 12px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+.qverdict.nhan { color: #1c5cab; }
+.qverdict.loai { color: #c2410c; }
+.qprobs { display: grid; gap: 2px; margin: 2px 0; }
+.qp { display: grid; grid-template-columns: 38px 1fr 34px; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+.qp b { text-align: right; color: var(--ink); font-weight: 600; }
+.qbar { height: 6px; background: #eef1f4; border-radius: 4px; overflow: hidden; }
+.qbar i { display: block; height: 100%; }

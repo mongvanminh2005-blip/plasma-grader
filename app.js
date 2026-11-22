@@ -2054,3 +2054,68 @@ $('#colExport').onclick = () => {
   }));
   downloadBlob(new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' }), `phan-tich-mau-${new Date().toISOString().slice(0, 10)}.csv`);
 };
+
+
+// ---------- PHÂN LOẠI NHANH: tải ảnh lên -> AI khoanh vùng -> mô hình màu -> kết quả (không lưu) ----------
+const quickItems = [];
+function quickRender() {
+  $('#quickHead').classList.toggle('hidden', !quickItems.length);
+  const done = quickItems.filter(q => q.res || q.error);
+  const nL = done.filter(q => q.res?.pred?.loai).length;
+  $('#quickCount').textContent = `${done.length}/${quickItems.length} ảnh · Nhận ${done.length - nL - done.filter(q => q.error).length} · Loại ${nL}`;
+  $('#quickList').innerHTML = quickItems.map(q => {
+    const head = `<div class="qimg">${q.url ? `<img src="${q.url}" alt="" />${q.poly ? `<svg viewBox="0 0 1 1" preserveAspectRatio="none"><polygon points="${q.poly}" /></svg>` : ''}` : '<div class="qwait">…</div>'}</div>`;
+    if (q.error) return `<div class="qcard">${head}<div class="qbody"><div class="qname">${esc(q.name)}</div><div class="qerr">⚠ ${esc(q.error)}</div></div></div>`;
+    if (!q.res) return `<div class="qcard">${head}<div class="qbody"><div class="qname">${esc(q.name)}</div><div class="muted">${esc(q.step || 'Đang chờ…')}</div></div></div>`;
+    const f = q.res.feat, p = q.res.pred;
+    const bars = p.probs.map((v, i) => `<div class="qp"><span>Độ ${PlasmaColor.model.grade.classes[i]}</span><div class="qbar"><i class="cg${PlasmaColor.model.grade.classes[i]}" style="width:${v * 100}%"></i></div><b>${Math.round(v * 100)}%</b></div>`).join('');
+    return `<div class="qcard">${head}<div class="qbody">
+      <div class="qname">${esc(q.name)}</div>
+      <div class="qverdict ${p.loai ? 'loai' : 'nhan'}">${p.loai ? 'LOẠI' : 'NHẬN'}<small>${p.loai ? 'đục rõ / nặng (độ 3–4)' : 'trong / đục nhẹ–vừa (độ 0–2)'}</small></div>
+      <div class="qline">Xác suất Loại <b>${Math.round(p.pLoai * 100)}%</b> <span class="muted">(ngưỡng ${Math.round(PlasmaColor.model.reject.threshold * 100)}%)</span></div>
+      <div class="qline">Độ ước tính <span class="gpill" data-g="${p.grade}">${p.grade}</span> <span class="muted">${GRADES.find(g => g.g === p.grade)?.label || ''}</span></div>
+      <div class="qprobs">${bars}</div>
+      <div class="qline"><span class="swatch" style="background:rgb(${Math.round(f.R)},${Math.round(f.G)},${Math.round(f.B)})"></span>${esc(f.color)} <span class="muted">· a ${Math.round(f.a)} · b ${Math.round(f.b)} · C ${f.C.toFixed(1)} · g_chrom ${f.g_chrom.toFixed(3)}</span></div>
+    </div></div>`;
+  }).join('');
+}
+async function quickAdd(files) {
+  files = [...files].filter(f => RAW_EXT.test(f.name) || f.type.startsWith('image/'));
+  if (!files.length) return toast('Hãy chọn tệp ảnh');
+  const items = files.map(f => ({ file: f, name: f.name }));
+  quickItems.unshift(...items.reverse()); items.reverse();
+  quickRender();
+  try { await PlasmaColor.loadModel(); } catch (e) { items.forEach(q => q.error = e.message); return quickRender(); }
+  for (const q of items) {
+    try {
+      q.step = 'Đang đọc ảnh…'; quickRender();
+      let src, orientation = 1;
+      if (RAW_EXT.test(q.file.name)) ({ bmp: src, orientation } = await decodeRaw(q.file));
+      else src = await createImageBitmap(q.file);
+      const img = orientCanvas(src, orientation);
+      q.step = 'AI đang khoanh vùng ống nghiệm…'; quickRender();
+      await ensureModel();
+      const job = colSegLock.then(() => TubeSeg.run(img)); colSegLock = job.catch(() => {});
+      const regions = await job;
+      if (!regions?.some(r => r.name === 'plasma')) throw new Error('AI không tìm thấy phần huyết tương');
+      const cut = await cropToTube(img, regions, 520);
+      q.url = URL.createObjectURL(cut.blob);
+      const pl = cut.regions.filter(r => r.name === 'plasma').sort((a, b) => b.conf - a.conf)[0];
+      q.poly = pl.pts.map(([x, y]) => `${x},${y}`).join(' ');
+      const feat = PlasmaColor.analyze(img, regions);
+      if (feat.error) throw new Error(feat.error);
+      const pred = PlasmaColor.predict(feat);
+      if (!pred) throw new Error('Không tính được chỉ số màu');
+      q.res = { feat, pred };
+      src.close?.();
+    } catch (e) { q.error = e.message || String(e); }
+    quickRender();
+  }
+}
+$('#quickPick').onclick = e => { e.stopPropagation(); $('#quickInput').click(); };
+$('#quickDrop').onclick = () => $('#quickInput').click();
+$('#quickInput').onchange = e => { quickAdd(e.target.files); e.target.value = ''; };
+['dragover', 'dragenter'].forEach(ev => $('#quickDrop').addEventListener(ev, e => { e.preventDefault(); $('#quickDrop').classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => $('#quickDrop').addEventListener(ev, e => { e.preventDefault(); $('#quickDrop').classList.remove('over'); }));
+$('#quickDrop').addEventListener('drop', e => quickAdd(e.dataTransfer.files));
+$('#quickClear').onclick = () => { quickItems.forEach(q => q.url && URL.revokeObjectURL(q.url)); quickItems.length = 0; quickRender(); };

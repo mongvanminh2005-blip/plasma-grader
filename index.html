@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath d=%27M16 2C16 2 6 14 6 20a10 10 0 0 0 20 0C26 14 16 2 16 2z%27 fill=%27%23e9a93a%27/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="style.css?v=27" />
+  <link rel="stylesheet" href="style.css?v=28" />
 </head>
 <body>
   <!-- ========== AUTH ========== -->
@@ -233,6 +233,16 @@
               <button class="btn outline sm" id="colExport">Xuất CSV</button>
             </div>
           </div>
+          <div class="panel quick">
+            <div class="panel-head"><h3>Tải ảnh lên để web phân loại</h3><span class="muted">Ảnh chỉ được phân tích trên máy bạn, không lưu lên hệ thống</span></div>
+            <div class="quick-drop" id="quickDrop">
+              <div><b>Kéo thả ảnh vào đây</b> hoặc <button class="btn primary sm" id="quickPick">Chọn ảnh</button></div>
+              <div class="muted">JPG, PNG, CR2… · chọn được nhiều ảnh cùng lúc</div>
+              <input type="file" id="quickInput" multiple accept="image/*,.cr2,.cr3,.nef,.arw,.dng,.raf,.orf,.rw2" hidden />
+            </div>
+            <div class="quick-head hidden" id="quickHead"><span id="quickCount"></span><button class="link" id="quickClear">Xoá kết quả</button></div>
+            <div class="quick-list" id="quickList"></div>
+          </div>
           <div id="colBody">
             <div class="col-progress hidden" id="colProgress"><span id="colProgText"></span><div class="bar"><i id="colProgBar"></i></div></div>
             <div class="cards" id="colCards"></div>
@@ -346,9 +356,9 @@
   </div>
 
   <script src="vendor/supabase.js?v=2.119.2" integrity="sha384-A97u3Qnt9GZHURO9YJZRe7VQgGUeFzcv6I1oIGnUTxQrCxnpQMwR0/G8F2zt9abZ"></script>
-  <script src="config.js?v=27"></script>
-  <script src="seg.js?v=27"></script>
-  <script src="color.js?v=27"></script>
-  <script src="app.js?v=27"></script>
+  <script src="config.js?v=28"></script>
+  <script src="seg.js?v=28"></script>
+  <script src="color.js?v=28"></script>
+  <script src="app.js?v=28"></script>
 </body>
 </html>
