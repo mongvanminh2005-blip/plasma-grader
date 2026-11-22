@@ -1940,18 +1940,19 @@ async function refreshColor() {
         const r = todo[k++];
         try {
           if (RAW_EXT.test(r.im.storage_path)) r.feat = { error: 'Ảnh RAW chưa chuyển JPEG' };
-          else if (!r.im.regions?.length) r.feat = { error: 'Chưa khoanh vùng' };
           else {
             const res = await fetch(urlOf(r.im)); if (!res.ok) throw new Error('Không tải được ảnh');
             const bmp = await createImageBitmap(await res.blob());
-            r.feat = PlasmaColor.analyze(bmp, r.im.regions); bmp.close();
+            let regions = r.im.regions;
+            if (!regions?.length) { await ensureModel(); regions = await TubeSeg.run(bmp); }   // ảnh chưa khoanh: AI khoanh tạm để lấy màu (không lưu)
+            r.feat = regions?.length ? PlasmaColor.analyze(bmp, regions) : { error: 'AI không tìm thấy ống nghiệm' }; bmp.close();
           }
         } catch (e) { r.feat = { error: e.message }; }
         colorCache.set(r.key, r.feat); r.pred = PlasmaColor.predict(r.feat);
         done++; prog(); redraw();
       }
     };
-    await Promise.all([worker(), worker(), worker(), worker()]);
+    await Promise.all([worker(), worker(), worker()]);
     if (run === colRun) { prog(); renderColor(); }
   } catch (e) { toast(e.message); }
 }
