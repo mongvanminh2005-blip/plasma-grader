@@ -1902,6 +1902,7 @@ if (sb) {
 
 
 // ---------- PHÂN TÍCH MÀU (mô hình của D:\BME4\analyze_color.py + hồi quy logistic) ----------
+let colSegLock = Promise.resolve();   // chạy AI khoanh vùng lần lượt
 const colorCache = new Map();          // id:độ dài vùng -> đặc trưng
 let colData = null, colRun = 0, colFilter = 'all', colFeat = 'b';
 const COL_FEATS = [['b', 'b* (vàng)'], ['C', 'C (độ đậm màu)'], ['g_chrom', 'g_chrom'], ['a', 'a* (đỏ)'], ['L', 'L (sáng)'], ['S', 'S (bão hoà)'], ['pLoai', 'P(Loại)']];
@@ -1944,7 +1945,7 @@ async function refreshColor() {
             const res = await fetch(urlOf(r.im)); if (!res.ok) throw new Error('Không tải được ảnh');
             const bmp = await createImageBitmap(await res.blob());
             let regions = r.im.regions;
-            if (!regions?.length) { await ensureModel(); regions = await TubeSeg.run(bmp); }   // ảnh chưa khoanh: AI khoanh tạm để lấy màu (không lưu)
+            if (!regions?.length) { await ensureModel(); const job = colSegLock.then(() => TubeSeg.run(bmp)); colSegLock = job.catch(() => {}); regions = await job; }   // ảnh chưa khoanh: AI khoanh tạm để lấy màu (không lưu)
             r.feat = regions?.length ? PlasmaColor.analyze(bmp, regions) : { error: 'AI không tìm thấy ống nghiệm' }; bmp.close();
           }
         } catch (e) { r.feat = { error: e.message }; }
