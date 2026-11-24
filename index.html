@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath d=%27M16 2C16 2 6 14 6 20a10 10 0 0 0 20 0C26 14 16 2 16 2z%27 fill=%27%23e9a93a%27/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="style.css?v=29" />
+  <link rel="stylesheet" href="style.css?v=30" />
 </head>
 <body>
   <!-- ========== AUTH ========== -->
@@ -38,6 +38,11 @@
         <label class="confirm hidden">Nhập lại mật khẩu
           <input name="confirm" type="password" minlength="8" maxlength="72" autocomplete="new-password" />
         </label>
+        <div class="role-pick hidden" id="rolePick">
+          <span>Bạn là</span>
+          <label><input type="radio" name="role" value="student" checked /> Sinh viên</label>
+          <label><input type="radio" name="role" value="doctor" /> Bác sĩ</label>
+        </div>
         <label class="remember"><input type="checkbox" name="remember" checked /> Ghi nhớ đăng nhập trên máy này</label>
         <p id="authError" class="error"></p>
         <button class="btn primary block" type="submit" id="authSubmit">Đăng nhập</button>
@@ -49,8 +54,8 @@
   <section id="pending" class="pending hidden">
     <div class="auth-card pending-card">
       <div class="brand big"><span class="drop"></span>Plasma Grader</div>
-      <h2 id="pendingTitle">Tài khoản đang chờ duyệt</h2>
-      <p id="pendingText">Tài khoản <b id="pendingUser"></b> đã được tạo. Quản trị viên cần duyệt trước khi bạn xem, tải lên và phân loại ảnh. Hãy báo quản trị viên rồi bấm "Kiểm tra lại".</p>
+      <h2 id="pendingTitle">Tài khoản đang bị khoá</h2>
+      <p id="pendingText">Tài khoản <b id="pendingUser"></b> đã bị quản trị viên khoá nên không xem, tải lên hay phân loại ảnh được. Hãy liên hệ quản trị viên rồi bấm "Kiểm tra lại".</p>
       <div class="mb-actions">
         <button class="btn primary" id="pendingCheck">Kiểm tra lại</button>
         <button class="btn outline" id="pendingLogout">Đăng xuất</button>
@@ -70,7 +75,7 @@
       <div class="user">
         <button class="btn admin-btn sm hidden" id="adminBtn">⚙ Quản trị<span class="pend-badge hidden" id="pendBadge"></span></button>
         <span class="avatar" id="avatar"></span>
-        <span id="username"></span>
+        <span id="username"></span><span class="role-tag hidden" id="myRole"></span>
         <button class="btn ghost sm" id="logoutBtn">Đăng xuất</button>
       </div>
     </header>
@@ -290,7 +295,7 @@
             <div class="panel">
               <div class="panel-head"><h3>Theo người phân loại</h3><div class="lgs" id="sumRaterLegend"></div></div>
               <div class="table-wrap"><table class="users sum-raters">
-                <thead><tr><th>Người phân loại</th><th class="num">Số ảnh</th><th>Phân bố độ</th><th class="num" title="Không tính độ 5">Độ trung bình</th><th class="num" title="Tỉ lệ chọn trùng với độ được chọn nhiều nhất trên các ảnh có ≥ 2 người phân loại">Trùng đa số</th></tr></thead>
+                <thead><tr><th>Người phân loại</th><th class="num">Số ảnh</th><th>Phân bố độ</th><th class="num" title="Không tính độ 5">Độ trung bình</th><th class="num" title="Tỉ lệ chọn trùng với độ được chọn nhiều nhất trên các ảnh có ≥ 2 người phân loại">Trùng đa số</th><th class="num" title="Tỉ lệ chọn trùng với độ bác sĩ chọn (kết quả đối chiếu). Với bác sĩ: so với các bác sĩ khác">Trùng bác sĩ</th></tr></thead>
                 <tbody id="sumRaters"></tbody>
               </table></div>
             </div>
@@ -345,7 +350,7 @@
           <div class="panel">
             <div class="panel-head"><h3>Tài khoản</h3><span class="muted" id="adminUserCount"></span></div>
             <div class="table-wrap"><table class="users">
-              <thead><tr><th>Tên đăng nhập</th><th>Trạng thái</th><th>Ngày tạo</th><th>Đăng nhập gần nhất</th><th class="num">Lô</th><th class="num">Ảnh</th><th class="num">Đã phân loại</th><th class="num">Dung lượng</th><th>Thao tác</th></tr></thead>
+              <thead><tr><th>Tên đăng nhập</th><th>Vai trò</th><th>Trạng thái</th><th>Ngày tạo</th><th>Đăng nhập gần nhất</th><th class="num">Lô</th><th class="num">Ảnh</th><th class="num">Đã phân loại</th><th class="num">Dung lượng</th><th>Thao tác</th></tr></thead>
               <tbody id="adminUsers"></tbody>
             </table></div>
           </div>
@@ -363,9 +368,9 @@
   </div>
 
   <script src="vendor/supabase.js?v=2.119.2" integrity="sha384-A97u3Qnt9GZHURO9YJZRe7VQgGUeFzcv6I1oIGnUTxQrCxnpQMwR0/G8F2zt9abZ"></script>
-  <script src="config.js?v=29"></script>
-  <script src="seg.js?v=29"></script>
-  <script src="color.js?v=29"></script>
-  <script src="app.js?v=29"></script>
+  <script src="config.js?v=30"></script>
+  <script src="seg.js?v=30"></script>
+  <script src="color.js?v=30"></script>
+  <script src="app.js?v=30"></script>
 </body>
 </html>

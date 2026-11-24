@@ -86,7 +86,7 @@ $('#pendingCheck').onclick = async () => {
   const { data } = await sb.auth.getSession();
   if (!data.session) return showAuth();
   const ok = await sb.rpc('is_approved');
-  if (ok.data) startApp(data.session.user); else toast('Tài khoản vẫn chưa được duyệt');
+  if (ok.data) startApp(data.session.user); else toast('Tài khoản vẫn đang bị khoá');
 };
 function showAuth() {
   $('#pending').classList.add('hidden');
@@ -104,6 +104,7 @@ function setMode(mode) {
   state.mode = mode;
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.mode === mode));
   $('.confirm').classList.toggle('hidden', mode !== 'register');
+  $('#rolePick').classList.toggle('hidden', mode !== 'register');
   $('#authForm').confirm.required = mode === 'register';
   $('#authForm').password.autocomplete = mode === 'register' ? 'new-password' : 'current-password';
   // yêu cầu độ mạnh chỉ áp dụng khi tạo tài khoản (người cũ có thể còn mật khẩu ngắn)
@@ -127,7 +128,8 @@ $('#authForm').onsubmit = async e => {
     localStorage.setItem(REMEMBER_KEY, f.remember.checked ? '1' : '0');
     const creds = { email: toEmail(name), password: f.password.value };
     if (state.mode === 'register') {
-      const data = check(await sb.auth.signUp(creds));
+      const role = f.role.value === 'doctor' ? 'doctor' : 'student';
+      const data = check(await sb.auth.signUp({ ...creds, options: { data: { role } } }));
       if (!data.session && !(await sb.auth.signInWithPassword(creds)).error) return; // đăng nhập luôn nếu không cần xác nhận
       if (!data.session) {
         err.style.color = 'var(--accent)';
@@ -159,7 +161,7 @@ async function startApp(user) {
   $('#adminBtn').classList.toggle('hidden', !state.isAdmin);
   $('#scopeBox').classList.remove('hidden');
   await loadProfiles().catch(e => { console.error(e); state.profiles = []; renderScope(); });
-  if (state.isAdmin) await loadUsers().then(() => { const n = state.users.filter(u => !u.approved).length; $('#pendBadge').textContent = n; $('#pendBadge').classList.toggle('hidden', !n); }).catch(e => console.error(e));
+  $('#pendBadge').classList.add('hidden');
   applySegOn();
   purgeTrash().catch(e => console.error('purge', e)).finally(updateTrashCount);
   connectLive();
@@ -341,10 +343,14 @@ const batch = () => state.batches.find(b => b.id === state.batchId);
 const current = () => state.images.find(i => i.id === state.currentId);
 // ảnh lệch: mình đã phân loại, có người khác phân loại, và các kết quả không giống nhau
 const isDiff = i => i.grade !== null && !!i.others?.size && [...i.others.values()].some(g => g !== i.grade);
+// độ bác sĩ (không tính mình) cho ảnh mình đã phân loại
+const docOf = i => i.grade === null || !i.others?.size ? null : doctorRef([...i.others.entries()]);
+const isDocDiff = i => { const d = docOf(i); return d !== null && d !== i.grade; };
 function view() {
   const f = state.filter;
   if (f === 'all') return state.images;
   if (f === 'diff') return state.images.filter(isDiff);
+  if (f === 'docdiff') return state.images.filter(isDocDiff);
   if (f === 'none') return state.images.filter(i => i.grade === null);
   return state.images.filter(i => i.grade === Number(f));
 }
@@ -376,11 +382,11 @@ function renderAll() {
     <div class="d"><div class="top"><span>Độ ${g}</span><b>${counts[k]}</b></div>
     <div class="track"><i data-g="${g}" style="width:${counts[k] / max * 100}%"></i></div></div>`).join('');
 
-  const nDiff = state.images.filter(isDiff).length;
-  if (state.filter === 'diff' && !nDiff) state.filter = 'all';
-  const chips = [['all', 'Tất cả', total], ['none', 'Chưa phân loại', total - graded], ...(nDiff ? [['diff', '⚠ Lệch nhau', nDiff]] : []), ...GRADES.map(({ g }, k) => [String(g), 'Độ ' + g, counts[k]])];
+  const nDiff = state.images.filter(isDiff).length, nDoc = state.images.filter(isDocDiff).length;
+  if ((state.filter === 'diff' && !nDiff) || (state.filter === 'docdiff' && !nDoc)) state.filter = 'all';
+  const chips = [['all', 'Tất cả', total], ['none', 'Chưa phân loại', total - graded], ...(nDiff ? [['diff', '⚠ Lệch nhau', nDiff]] : []), ...(nDoc ? [['docdiff', '🩺 Khác bác sĩ', nDoc]] : []), ...GRADES.map(({ g }, k) => [String(g), 'Độ ' + g, counts[k]])];
   $('#filters').innerHTML = chips.map(([k, l, c]) =>
-    `<button class="chip ${k === 'diff' ? 'diffchip' : ''} ${state.filter === k ? 'active' : ''}" data-f="${k}" ${k === 'diff' ? 'title="Ảnh bạn đã phân loại mà người khác chọn độ khác"' : ''}>${l}<span class="c">${c}</span></button>`).join('');
+    `<button class="chip ${k === 'diff' || k === 'docdiff' ? 'diffchip' : ''} ${state.filter === k ? 'active' : ''}" data-f="${k}" ${k === 'diff' ? 'title="Ảnh bạn đã phân loại mà người khác chọn độ khác"' : ''}>${l}<span class="c">${c}</span></button>`).join('');
   $('#filters').querySelectorAll('.chip').forEach(c => c.onclick = () => {
     state.filter = c.dataset.f;
     const v = view();
@@ -432,12 +438,17 @@ function showCurrent() {
 
 function renderDiffBar(img) {
   const bar = $('#diffBar');
-  if (!img || !isDiff(img)) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
+  const doc = img ? docOf(img) : null;
+  if (!img || (!isDiff(img) && doc === null)) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
   const list = state.images.filter(isDiff), k = list.indexOf(img);
-  const who = [[state.user.id, img.grade], ...img.others].map(([u, g]) =>
-    `<span class="dchip" data-g="${g}">${u === state.user.id ? 'Bạn' : esc(nameOfUser(u))}: <b>${g}</b></span>`).join('');
-  bar.innerHTML = `<span class="dmsg">⚠ Ảnh này được phân loại khác nhau</span>${who}
-    <span class="dact">${list.length > 1 ? `<button class="link" id="diffNext">Ảnh lệch tiếp theo (${k + 1}/${list.length}) →</button>` : ''}
+  const who = [[state.user.id, img.grade], ...[...img.others].sort((a, b) => isDoctor(b[0]) - isDoctor(a[0]))].map(([u, g]) =>
+    `<span class="dchip ${isDoctor(u) ? 'doc' : ''}">${roleTag(u)} ${u === state.user.id ? 'Bạn' : esc(nameOfUser(u))}: <b>${g}</b></span>`).join('');
+  const msg = doc === null ? '<span class="dmsg">⚠ Ảnh này được phân loại khác nhau</span>'
+    : doc === img.grade ? `<span class="dmsg ok">🩺 Trùng kết quả bác sĩ (độ ${doc})</span>`
+    : `<span class="dmsg">🩺 Bác sĩ chọn độ ${doc}, bạn chọn độ ${img.grade}</span>`;
+  bar.classList.toggle('agree', doc !== null && doc === img.grade && !isDiff(img));
+  bar.innerHTML = `${msg}${who}
+    <span class="dact">${k >= 0 && list.length > 1 ? `<button class="link" id="diffNext">Ảnh lệch tiếp theo (${k + 1}/${list.length}) →</button>` : ''}
     <button class="link" id="diffLink" title="Sao chép đường dẫn mở thẳng tới ảnh này">🔗 Sao chép đường dẫn</button></span>`;
   bar.classList.remove('hidden');
   $('#diffNext')?.addEventListener('click', () => select(list[(k + 1) % list.length].id));
@@ -682,7 +693,7 @@ async function buildCsv(batchId) {
     const byImg = new Map(); ratings.forEach(r => { if (!byImg.has(r.image_id)) byImg.set(r.image_id, new Map()); byImg.get(r.image_id).set(r.user_id, r); });
     const labelOf = g => GRADES.find(x => x.g === g)?.label || '';
     const e = v => { let t = String(v ?? ''); if (/^[=+\-@\t\r]/.test(t) && !/^-?\d+(\.\d+)?$/.test(t)) t = "'" + t; return `"${t.replace(/"/g, '""')}"`; };
-    const head = ['Lô', 'Người tải', 'Đường dẫn', 'Tên file', ...raters.map(u => 'Độ – ' + nameOfUser(u)),
+    const head = ['Lô', 'Người tải', 'Đường dẫn', 'Tên file', ...raters.map(u => `Độ – ${nameOfUser(u)} (${ROLE_LABEL[roleOf(u)]})`),
       'Số người phân loại', 'Độ phổ biến nhất', 'Mức', 'Đồng thuận', 'Chênh lệch (0–4)', 'Ghi chú',
       'Khoanh vùng', 'Plasma / (plasma + hồng cầu) theo chiều cao (%)'];
     const lines = [head.map(e).join(',')];
@@ -715,8 +726,21 @@ async function loadUsers() {
   state.users = check(await sb.rpc('admin_list_users'));
 }
 async function loadProfiles() {
-  state.profiles = check(await sb.from('profiles').select('id, username').order('username'));
+  state.profiles = check(await sb.from('profiles').select('id, username, role').order('username'));
+  const me = state.profiles.find(p => p.id === state.user?.id);
+  state.myRole = me?.role || 'student';
+  $('#myRole').textContent = ROLE_LABEL[state.myRole]; $('#myRole').dataset.r = state.myRole; $('#myRole').classList.remove('hidden');
   renderScope();
+}
+const ROLE_LABEL = { doctor: 'Bác sĩ', student: 'Sinh viên' };
+const roleOf = id => (state.profiles.find(p => p.id === id)?.role) || 'student';
+const isDoctor = id => roleOf(id) === 'doctor';
+const roleTag = id => `<span class="role-tag" data-r="${roleOf(id)}">${roleOf(id) === 'doctor' ? 'BS' : 'SV'}</span>`;
+// độ "đối chiếu" của bác sĩ: độ được các bác sĩ chọn nhiều nhất (không tính độ 5, hoà thì bỏ); exclude = bỏ một người
+function doctorRef(entries, exclude) {
+  const g = entries.filter(([u, x]) => u !== exclude && isDoctor(u) && x !== null && x !== 5).map(([, x]) => x);
+  if (!g.length) return null;
+  const m = modeOf(g); return m.length === 1 ? m[0] : null;
 }
 const nameOfUser = id => id === state.user?.id ? displayName(state.user.email) : (state.profiles.find(p => p.id === id)?.username || '?');
 function renderScope() {
@@ -797,26 +821,36 @@ async function refreshAdmin() {
   } catch (e) { toast(e.message); }
 }
 function renderUsers() {
-  const pend = state.users.filter(u => !u.approved).length;
-  $('#adminUserCount').textContent = state.users.length + ' tài khoản' + (pend ? ` · ${pend} chờ duyệt` : '');
-  $('#pendBadge').textContent = pend; $('#pendBadge').classList.toggle('hidden', !pend);
+  const locked = state.users.filter(u => !u.approved).length;
+  const nDoc = state.users.filter(u => isDoctor(u.id)).length;
+  $('#adminUserCount').textContent = `${state.users.length} tài khoản · ${nDoc} bác sĩ · ${state.users.length - nDoc} sinh viên` + (locked ? ` · ${locked} bị khoá` : '');
+  $('#pendBadge').classList.add('hidden');
   $('#adminUsers').innerHTML = state.users.map(u => {
     const me = u.id === state.user.id;
     return `<tr data-id="${u.id}">
       <td><span class="uname">${esc(u.username)}</span>${u.is_admin ? '<span class="role">Quản trị</span>' : ''}${me ? '<span class="you">(bạn)</span>' : ''}</td>
-      <td>${u.approved ? '<span class="st ok">Đã duyệt</span>' : '<span class="st wait">⏳ Chờ duyệt / bị khoá</span>'}</td>
+      <td><select class="role-sel" data-role="1">${['student', 'doctor'].map(r => `<option value="${r}" ${roleOf(u.id) === r ? 'selected' : ''}>${ROLE_LABEL[r]}</option>`).join('')}</select></td>
+      <td>${u.approved ? '<span class="st ok">Hoạt động</span>' : '<span class="st wait">🔒 Đã khoá</span>'}</td>
       <td>${dateStr(u.created_at)}</td>
       <td>${u.last_sign_in_at ? new Date(u.last_sign_in_at).toLocaleString('vi-VN') : '<span class="muted">chưa đăng nhập</span>'}</td>
       <td class="num">${u.batches}</td><td class="num">${u.images}</td><td class="num">${u.graded}</td>
       <td class="num">${fmtBytes(u.storage_bytes)}</td>
       <td><div class="actions">
-        ${me ? '' : (u.approved ? '<button class="btn outline" data-act="lock">Khoá</button>' : '<button class="btn primary" data-act="approve">✓ Duyệt</button>')}
+        ${me ? '' : (u.approved ? '<button class="btn outline" data-act="lock">Khoá</button>' : '<button class="btn primary" data-act="approve">Mở khoá</button>')}
         <button class="btn outline" data-act="view">Xem dữ liệu</button>
         <button class="btn outline" data-act="pass">Đặt lại mật khẩu</button>
         ${me ? '' : `<button class="btn outline" data-act="role">${u.is_admin ? 'Bỏ quản trị' : 'Cấp quản trị'}</button>
         <button class="btn danger-ghost" data-act="del">Xoá</button>`}
       </div></td></tr>`;
   }).join('');
+  $('#adminUsers').querySelectorAll('select[data-role]').forEach(sel => sel.onchange = async () => {
+    const u = state.users.find(x => x.id === sel.closest('tr').dataset.id);
+    try {
+      check(await sb.rpc('admin_set_role', { target: u.id, new_role: sel.value }));
+      toast(`${u.username} giờ là ${ROLE_LABEL[sel.value]}`);
+      await loadProfiles(); renderUsers();
+    } catch (e) { toast(e.message); sel.value = roleOf(u.id); }
+  });
   $('#adminUsers').querySelectorAll('button[data-act]').forEach(b => b.onclick = () =>
     adminAction(b.dataset.act, state.users.find(u => u.id === b.closest('tr').dataset.id)));
 }
@@ -824,9 +858,9 @@ async function adminAction(act, u) {
   try {
     if (act === 'view') return viewUserData(u.id);
     if (act === 'approve' || act === 'lock') {
-      if (act === 'lock' && !confirm(`Khoá tài khoản "${u.username}"? Người này bị đăng xuất khỏi mọi thiết bị và không xem được dữ liệu nữa (dữ liệu vẫn giữ nguyên, có thể duyệt lại).`)) return;
+      if (act === 'lock' && !confirm(`Khoá tài khoản "${u.username}"? Người này bị đăng xuất khỏi mọi thiết bị và không xem được dữ liệu nữa (dữ liệu vẫn giữ nguyên, có thể mở khoá lại).`)) return;
       check(await sb.rpc('admin_set_approved', { target: u.id, approve: act === 'approve' }));
-      toast(act === 'approve' ? `Đã duyệt ${u.username}` : `Đã khoá ${u.username}`);
+      toast(act === 'approve' ? `Đã mở khoá ${u.username}` : `Đã khoá ${u.username}`);
       return refreshAdmin();
     }
     if (act === 'pass') {
@@ -1513,7 +1547,8 @@ function computeSummary(images, ratings, batchNames) {
   const byImg = new Map();
   ratings.forEach(r => { if (!byImg.has(r.image_id)) byImg.set(r.image_id, new Map()); byImg.get(r.image_id).set(r.user_id, r.grade); });
   const raters = [...new Set(ratings.map(r => r.user_id))].sort((a, b) => nameOfUser(a).localeCompare(nameOfUser(b)));
-  const per = new Map(raters.map(u => [u, { u, n: 0, dist: [0, 0, 0, 0, 0, 0], sum: 0, cnt04: 0, agree: 0, agreeN: 0 }]));
+  const per = new Map(raters.map(u => [u, { u, n: 0, dist: [0, 0, 0, 0, 0, 0], sum: 0, cnt04: 0, agree: 0, agreeN: 0, doc: 0, docN: 0 }]));
+  let stuDoc = 0, stuDocN = 0;
   let multi = 0, full = 0, within1 = 0, within1N = 0, review = 0;
   const disagree = [];
   const pair = new Map(); const pk = (a, b) => a < b ? a + '|' + b : b + '|' + a;
@@ -1522,6 +1557,11 @@ function computeSummary(images, ratings, batchNames) {
     const entries = [...m.entries()], gs = entries.map(([, g]) => g);
     if (gs.includes(5)) review++;
     entries.forEach(([u, g]) => { const p = per.get(u); p.n++; p.dist[g]++; if (g <= 4) { p.sum += g; p.cnt04++; } });
+    entries.forEach(([u, g]) => {
+      const ref = doctorRef(entries, u); if (ref === null) return;
+      const p = per.get(u); p.docN++; if (g === ref) p.doc++;
+      if (!isDoctor(u)) { stuDocN++; if (g === ref) stuDoc++; }
+    });
     if (gs.length < 2) return;
     multi++;
     const same = new Set(gs).size === 1; if (same) full++;
@@ -1536,7 +1576,7 @@ function computeSummary(images, ratings, batchNames) {
     if (!same) disagree.push({ im, entries, spread: num.length >= 2 ? Math.max(...num) - Math.min(...num) : 0, has5: gs.includes(5), batch: batchNames.get(im.batch_id) });
   });
   disagree.sort((a, b) => b.spread - a.spread || b.entries.length - a.entries.length);
-  return { images, ratings, raters, per, pair, pk, multi, full, within1, within1N, review, disagree,
+  return { images, ratings, raters, per, pair, pk, multi, full, within1, within1N, review, disagree, stuDoc, stuDocN,
     gradedImgs: byImg.size, total: images.length };
 }
 
@@ -1577,19 +1617,21 @@ function renderSummary() {
     tile('Ảnh có ≥ 2 người phân loại', d.multi) +
     tile('Đồng thuận hoàn toàn', pct(d.full, d.multi), d.multi ? `${d.full}/${d.multi} ảnh mọi người cùng độ` : 'cần ≥ 2 người phân loại cùng ảnh') +
     tile('Lệch tối đa 1 độ', pct(d.within1, d.within1N), d.within1N ? `${d.within1}/${d.within1N} ảnh (không tính độ 5)` : '') +
-    tile('Ảnh có người chọn “Cân nhắc”', d.review);
+    tile('Ảnh có người chọn “Cân nhắc”', d.review) +
+    tile('Sinh viên trùng bác sĩ', pct(d.stuDoc, d.stuDocN), d.stuDocN ? `${d.stuDoc}/${d.stuDocN} lượt có kết quả bác sĩ để đối chiếu` : 'chưa có ảnh nào bác sĩ đã phân loại');
 
   // theo từng người phân loại
   $('#sumRaterLegend').innerHTML = GRADES.map(g => `<span class="lg"><i class="cg${g.g}"></i>${g.g} ${g.label}</span>`).join('');
-  $('#sumRaters').innerHTML = d.raters.length ? [...d.per.values()].sort((a, b) => b.n - a.n).map(p => {
+  $('#sumRaters').innerHTML = d.raters.length ? [...d.per.values()].sort((a, b) => isDoctor(b.u) - isDoctor(a.u) || b.n - a.n).map(p => {
     const bar = p.dist.map((c, g) => c ? `<i class="cg${g}" style="flex:${c}" title="${esc(nameOfUser(p.u))} · Độ ${g} (${GRADES[g].label}): ${c} ảnh (${pct(c, p.n)})"></i>` : '').join('');
     const counts = p.dist.map((c, g) => c ? `<span><i class="cg${g}"></i>${g}: <b>${c}</b></span>` : '').join('');
-    return `<tr><td class="uname">${esc(nameOfUser(p.u))}${p.u === state.user.id ? ' <span class="you">(bạn)</span>' : ''}</td>
+    return `<tr><td class="uname">${roleTag(p.u)} ${esc(nameOfUser(p.u))}${p.u === state.user.id ? ' <span class="you">(bạn)</span>' : ''}</td>
       <td class="num">${p.n}</td>
       <td class="distcell"><div class="stack">${bar}</div><div class="dnum">${counts}</div></td>
       <td class="num">${p.cnt04 ? (p.sum / p.cnt04).toFixed(2) : '–'}</td>
-      <td class="num">${p.agreeN ? pct(p.agree, p.agreeN) : '–'}<small>${p.agreeN ? ` (${p.agreeN})` : ''}</small></td></tr>`;
-  }).join('') : '<tr><td colspan="5" class="muted empty-row">Chưa có ai phân loại trong phạm vi này</td></tr>';
+      <td class="num">${p.agreeN ? pct(p.agree, p.agreeN) : '–'}<small>${p.agreeN ? ` (${p.agreeN})` : ''}</small></td>
+      <td class="num">${p.docN ? pct(p.doc, p.docN) : '–'}<small>${p.docN ? ` (${p.docN})` : ''}</small></td></tr>`;
+  }).join('') : '<tr><td colspan="6" class="muted empty-row">Chưa có ai phân loại trong phạm vi này</td></tr>';
 
   // đồng thuận từng cặp
   const R = d.raters;
@@ -1908,6 +1950,8 @@ let colData = null, colRun = 0, colFilter = 'all', colFeat = 'b';
 const COL_FEATS = [['b', 'b* (vàng)'], ['C', 'C (độ đậm màu)'], ['g_chrom', 'g_chrom'], ['a', 'a* (đỏ)'], ['L', 'L (sáng)'], ['S', 'S (bão hoà)'], ['pLoai', 'P(Loại)']];
 const fmtN = (v, d = 1) => Number.isFinite(v) ? v.toFixed(d) : '–';
 function majorityGrade(rs) {
+  const doc = doctorRef(rs.map(r => [r.user_id, r.grade]));
+  if (doc !== null) return doc;   // có bác sĩ thì lấy kết quả bác sĩ làm đối chiếu
   const g = rs.map(r => r.grade).filter(x => x !== 5);
   if (!g.length) return null;
   const m = modeOf(g); return m.length === 1 ? m[0] : null;   // hoà thì không tính

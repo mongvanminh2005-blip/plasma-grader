@@ -556,3 +556,16 @@ table.matrix td.self, table.matrix td.na { background: #f3f5f7; color: var(--mut
 .quick-list.one .qimg { width: 150px; }
 .qsub { font-size: 11px; margin-top: -4px; }
 .okc { color: #15803d; font-weight: 600; } .halfc { color: #b7791f; font-weight: 600; } .badc { color: #c2410c; font-weight: 600; }
+
+/* ---------- Vai trò Bác sĩ / Sinh viên ---------- */
+.role-pick { display: flex; align-items: center; gap: 14px; font-size: 14px; margin: 2px 0 6px; }
+.role-pick > span { color: var(--muted); }
+.role-pick label { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-weight: 500; }
+.role-pick input { width: auto; margin: 0; }
+.role-tag { display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 6px; letter-spacing: .02em; vertical-align: 1px; background: #eef1f4; color: #475467; }
+.role-tag[data-r="doctor"] { background: #e6f4f2; color: #0b5f59; }
+#myRole { margin-left: 6px; font-size: 11px; }
+.diff-bar .dchip.doc { border-color: #9fd6cf; background: #f0faf8; }
+.diff-bar .dmsg.ok { color: #0b5f59; }
+.diff-bar.agree { background: #eef9f6; border-bottom-color: #cdebe5; }
+.role-sel { padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line); font-size: 13px; background: #fff; }
