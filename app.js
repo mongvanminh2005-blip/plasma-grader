@@ -2215,3 +2215,45 @@ $('#quickInput').onchange = e => { quickAdd(e.target.files); e.target.value = ''
 ['dragleave', 'drop'].forEach(ev => $('#quickDrop').addEventListener(ev, e => { e.preventDefault(); $('#quickDrop').classList.remove('over'); }));
 $('#quickDrop').addEventListener('drop', e => quickAdd(e.dataTransfer.files));
 $('#quickClear').onclick = () => { quickItems.forEach(q => q.url && URL.revokeObjectURL(q.url)); quickItems.length = 0; quickRender(); };
+
+// ===== Chụp bằng camera (Phân tích màu) =====
+let camStream = null;
+function camStop() { camStream?.getTracks().forEach(t => t.stop()); camStream = null; $('#camVideo').srcObject = null; $('#camBox').classList.add('hidden'); }
+async function camStart(deviceId) {
+  camStream?.getTracks().forEach(t => t.stop());
+  const video = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } };
+  Object.assign(video, { width: { ideal: 3840 }, height: { ideal: 2160 } });
+  camStream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+  $('#camVideo').srcObject = camStream;
+  $('#camBox').classList.remove('hidden');
+  const cur = camStream.getVideoTracks()[0]?.getSettings().deviceId;
+  const cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+  const sel = $('#camSelect');
+  sel.innerHTML = cams.map((d, i) => `<option value="${esc(d.deviceId)}"${d.deviceId === cur ? ' selected' : ''}>${esc(d.label || 'Camera ' + (i + 1))}</option>`).join('');
+  sel.classList.toggle('hidden', cams.length < 2);
+}
+$('#camOpen').onclick = async e => {
+  e.stopPropagation();
+  if (!navigator.mediaDevices?.getUserMedia) return $('#camInput').click();   // trình duyệt cũ: dùng app camera của máy
+  try { await camStart(); $('#camBox').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+  catch (err) {
+    if (err.name === 'NotAllowedError') toast('Bạn chưa cho phép web dùng camera');
+    else if (err.name === 'NotFoundError') toast('Không tìm thấy camera trên máy');
+    else toast('Không mở được camera: ' + (err.message || err.name));
+    camStop();
+  }
+};
+$('#camSelect').onchange = e => camStart(e.target.value).catch(err => toast('Không đổi được camera: ' + err.message));
+$('#camClose').onclick = camStop;
+$('#camShot').onclick = async () => {
+  const v = $('#camVideo');
+  if (!v.videoWidth) return toast('Camera chưa sẵn sàng');
+  const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight;
+  c.getContext('2d').drawImage(v, 0, 0);
+  const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.95));
+  const t = new Date(), p = n => String(n).padStart(2, '0');
+  const name = `camera_${p(t.getHours())}${p(t.getMinutes())}${p(t.getSeconds())}.jpg`;
+  quickAdd([new File([blob], name, { type: 'image/jpeg' })]);
+};
+$('#camInput').onchange = e => { quickAdd(e.target.files); e.target.value = ''; };
+document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => { if (b.dataset.view !== 'color') camStop(); }));
