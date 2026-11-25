@@ -600,3 +600,6 @@ table.matrix td.self, table.matrix td.na { background: #f3f5f7; color: var(--mut
 .dr-act { display: flex; gap: 10px; justify-content: center; }
 .dr-act .btn { padding: 10px 18px; font-size: 14px; }
 .dr-hint { font-size: 11px; color: var(--muted); margin-top: 10px; }
+
+.dr-keep { display: inline-flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; color: var(--ink); cursor: pointer; }
+.dr-keep input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }

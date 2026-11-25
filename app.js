@@ -532,7 +532,11 @@ async function setGrade(g) {
   if (!ok) img.grade = prev;
   const nv = view();
   renderAll();
-  if (ok && g !== null && amDoctor()) { showCurrent(); showDocResult(img); loadBatches(); return; }   // bác sĩ: xem kết quả, không tự chuyển
+  if (ok && g !== null && amDoctor()) {   // bác sĩ: không tự chuyển; chỉ hiện bảng lớn khi không khớp sinh viên
+    showCurrent();
+    if (stuMatch(img) === false && docPopupOn()) showDocResult(img);
+    loadBatches(); return;
+  }   // bác sĩ: xem kết quả, không tự chuyển
   if (ok && $('#autoNext').checked && g !== null) {
     const nextPos = nv.some(i => i.id === img.id) ? pos + 1 : pos;
     if (nv[nextPos]) select(nv[nextPos].id);
@@ -744,6 +748,8 @@ async function loadProfiles() {
   const me = state.profiles.find(p => p.id === state.user?.id);
   state.myRole = me?.role || 'student';
   $('#autoNextBox').classList.toggle('hidden', state.myRole === 'doctor');
+  $('#docPopupBox').classList.toggle('hidden', state.myRole !== 'doctor');
+  $('#docPopup').checked = docPopupOn();
   $('#myRole').textContent = ROLE_LABEL[state.myRole]; $('#myRole').dataset.r = state.myRole; $('#myRole').classList.remove('hidden');
   renderScope();
 }
@@ -785,11 +791,20 @@ function showDocResult(img) {
   box.className = 'doc-result ' + cls;
   box.innerHTML = `<div class="dr-card"><div class="dr-icon">${icon}</div><div class="dr-title">${title}</div><div class="dr-sub">${esc(sub)}</div>${bars}
     <div class="dr-act"><button class="btn outline" id="drClose">Xem lại ảnh</button><button class="btn primary" id="drNext">Ảnh tiếp theo →</button></div>
+    <label class="dr-keep"><input type="checkbox" id="drKeep" ${docPopupOn() ? 'checked' : ''} /> Tiếp tục hiện thông báo này khi không khớp</label>
     <div class="dr-hint">Enter: ảnh tiếp theo · Esc: đóng</div></div>`;
+  $('#drKeep').onchange = e => setDocPopup(e.target.checked);
   $('#drClose').onclick = hideDocResult;
   $('#drNext').onclick = () => { hideDocResult(); step(1); };
   setTimeout(() => $('#drNext')?.focus(), 0);
 }
+const docPopupOn = () => localStorage.getItem('pg-docpopup') !== '0';
+function setDocPopup(on) {
+  localStorage.setItem('pg-docpopup', on ? '1' : '0');
+  $('#docPopup').checked = on;
+  toast(on ? 'Sẽ hiện bảng thông báo khi không khớp sinh viên' : 'Đã tắt bảng thông báo – kết quả chỉ hiện dưới ảnh (bật lại ở công tắc dưới ảnh)');
+}
+$('#docPopup').onchange = e => setDocPopup(e.target.checked);
 function hideDocResult() { $('#docResult').classList.add('hidden'); $('#docResult').innerHTML = ''; }
 document.addEventListener('keydown', e => {
   if ($('#docResult').classList.contains('hidden')) return;
@@ -1527,7 +1542,7 @@ window.addEventListener('resize', debounce(applyZoom, 100));
 (() => {
   const st = $('#stage'); let drag = null;
   st.addEventListener('pointerdown', e => {
-    if (seg.editing || e.button !== 0 || e.target.closest('.nav, .zoom-ctl, .counter')) return;
+    if (seg.editing || e.button !== 0 || e.target.closest('.nav, .zoom-ctl, .counter, .doc-result')) return;
     drag = { x: e.clientX, y: e.clientY, pan: [...seg.pan], moved: false };
     st.setPointerCapture(e.pointerId);
   });
@@ -1540,9 +1555,9 @@ window.addEventListener('resize', debounce(applyZoom, 100));
   });
   const end = () => { if (!drag) return; if (drag.moved) renderOverlay(); drag = null; st.classList.remove('dragging'); };
   st.addEventListener('pointerup', end); st.addEventListener('pointercancel', end);
-  st.addEventListener('dblclick', e => { if (seg.editing || e.target.closest('.nav, .zoom-ctl')) return; seg.pan = [0, 0]; applyZoom(); });
+  st.addEventListener('dblclick', e => { if (seg.editing || e.target.closest('.nav, .zoom-ctl, .doc-result')) return; seg.pan = [0, 0]; applyZoom(); });
   st.addEventListener('wheel', e => {
-    if (seg.editing && seg.drawing) return;
+    if ((seg.editing && seg.drawing) || e.target.closest('.doc-result')) return;
     e.preventDefault();
     const levels = [1, 1.5, 2, 3, 4, 6, 8];
     const cur = lastZoom.f;
