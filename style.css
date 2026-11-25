@@ -575,3 +575,6 @@ table.matrix td.self, table.matrix td.na { background: #f3f5f7; color: var(--mut
 .cam-guide { position: absolute; top: 6%; bottom: 6%; left: 50%; width: 22%; transform: translateX(-50%); border: 2px dashed rgba(255,255,255,.55); border-radius: 12px; pointer-events: none; }
 .cam-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; }
 .cam-tip { font-size: 12px; text-align: center; }
+
+.diff-bar .dmsg.bad { color: #b42318; }
+.diff-bar.miss { background: #fdf0ec; border-bottom-color: #f6d2c6; }

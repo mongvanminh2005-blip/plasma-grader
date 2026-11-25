@@ -160,7 +160,8 @@ async function startApp(user) {
   await loadProfiles().catch(e => { console.error(e); state.profiles = []; renderScope(); });
   $('#pendBadge').classList.add('hidden');
   applySegOn();
-  purgeTrash().catch(e => console.error('purge', e)).finally(updateTrashCount);
+  applyAdminUi();
+  if (state.isAdmin) purgeTrash().catch(e => console.error('purge', e)).finally(updateTrashCount);
   connectLive();
   await loadBatches();
   const saved = Number(localStorage.getItem('batchId'));
@@ -246,8 +247,8 @@ function renderBatches() {
   if (!state.batches.length) ul.innerHTML = '<li class="muted" style="cursor:default">Chưa có lô nào</li>';
   else ul.innerHTML = state.batches.map(b => {
     const pct = b.total ? Math.round(b.graded / b.total * 100) : 0;
-    const canMerge = b.user_id === state.user?.id || state.isAdmin;
-    const pick = state.merge ? (canMerge ? `<input type="checkbox" class="mpick" ${state.merge.has(b.id) ? 'checked' : ''} />` : '<span class="mpick-x" title="Không phải lô của bạn">—</span>') : '';
+    const canMerge = state.isAdmin;
+    const pick = state.merge ? (canMerge ? `<input type="checkbox" class="mpick" ${state.merge.has(b.id) ? 'checked' : ''} />` : '<span class="mpick-x" title="Chỉ quản trị viên gộp lô">—</span>') : '';
     return `<li data-id="${b.id}" class="${b.id === state.batchId && !state.merge ? 'active' : ''} ${state.merge ? 'picking' : ''} ${state.merge?.has(b.id) ? 'picked' : ''} ${state.merge && !canMerge ? 'nopick' : ''}">${pick}<div class="bbody">
       <div class="bn" title="${esc(b.name)}">${!state.merge && canMerge ? `<button class="bren" data-ren="${b.id}" title="Đổi tên lô">✎</button>` : ''}${b.user_id !== state.user?.id ? `<span class="owner-tag">${esc(b.owner || '?')}</span>` : (b.shared ? '' : '<span class="owner-tag lock" title="Lô riêng">🔒</span>')}${esc(b.name)}</div>
       <div class="bm"><span>Tôi: ${b.graded}/${b.total} · 👥 ${b.raters || 0} · ${dateStr(b.created_at)}</span>
@@ -348,6 +349,7 @@ function view() {
   if (f === 'all') return state.images;
   if (f === 'diff') return state.images.filter(isDiff);
   if (f === 'docdiff') return state.images.filter(isDocDiff);
+  if (f === 'stumiss') return state.images.filter(i => stuMatch(i) === false);
   if (f === 'none') return state.images.filter(i => i.grade === null);
   return state.images.filter(i => i.grade === Number(f));
 }
@@ -359,7 +361,7 @@ function renderAll() {
   const other = b.user_id !== state.user.id;
   $('#batchMeta').textContent = `${total} ảnh · tạo ngày ${dateStr(b.created_at)}`;
   $('#addToBatch').classList.toggle('hidden', other);
-  const canManage = !other || state.isAdmin;
+  const canManage = state.isAdmin;   // chỉ quản trị viên kiểm soát dữ liệu
   $('#sharedBox').classList.toggle('hidden', !canManage);
   $('#renameBatch').classList.toggle('hidden', !canManage);
   $('#batchShared').checked = !!b.shared;
@@ -368,7 +370,7 @@ function renderAll() {
   if (other) $('#batchMeta').textContent = `${total} ảnh · lô chung của ${b.owner || '?'} · ${b.raters || 0} người đã phân loại`;
   else $('#batchMeta').textContent += ` · ${b.shared ? 'lô chung' : 'lô riêng'} · ${b.raters || 0} người đã phân loại`;
   const raws = state.images.filter(i => RAW_EXT.test(i.storage_path));
-  $('#rawBanner').classList.toggle('hidden', !raws.length || rawBusy);
+  $('#rawBanner').classList.toggle('hidden', !raws.length || rawBusy || !state.isAdmin);
   if (raws.length) $('#rawText').textContent = `${raws.length} ảnh đang lưu ở dạng RAW (trình duyệt không hiển thị được và tốn dung lượng). Chuyển sang JPEG để xem, phân loại và giải phóng dung lượng — kết quả phân loại được giữ nguyên.`;
   $('#progressText').textContent = `${graded}/${total}`;
   $('#progressBar').style.width = (total ? graded / total * 100 : 0) + '%';
@@ -379,11 +381,12 @@ function renderAll() {
     <div class="d"><div class="top"><span>Độ ${g}</span><b>${counts[k]}</b></div>
     <div class="track"><i data-g="${g}" style="width:${counts[k] / max * 100}%"></i></div></div>`).join('');
 
-  const nDiff = state.images.filter(isDiff).length, nDoc = state.images.filter(isDocDiff).length;
-  if ((state.filter === 'diff' && !nDiff) || (state.filter === 'docdiff' && !nDoc)) state.filter = 'all';
-  const chips = [['all', 'Tất cả', total], ['none', 'Chưa phân loại', total - graded], ...(nDiff ? [['diff', '⚠ Lệch nhau', nDiff]] : []), ...(nDoc ? [['docdiff', '🩺 Khác bác sĩ', nDoc]] : []), ...GRADES.map(({ g }, k) => [String(g), 'Độ ' + g, counts[k]])];
+  const nDiff = state.images.filter(isDiff).length, nDoc = amDoctor() ? 0 : state.images.filter(isDocDiff).length;
+  const nMiss = state.images.filter(i => stuMatch(i) === false).length;
+  if ((state.filter === 'diff' && !nDiff) || (state.filter === 'docdiff' && !nDoc) || (state.filter === 'stumiss' && !nMiss)) state.filter = 'all';
+  const chips = [['all', 'Tất cả', total], ['none', 'Chưa phân loại', total - graded], ...(nDiff ? [['diff', '⚠ Lệch nhau', nDiff]] : []), ...(nDoc ? [['docdiff', '🩺 Khác bác sĩ', nDoc]] : []), ...(nMiss ? [['stumiss', '✗ Không khớp sinh viên', nMiss]] : []), ...GRADES.map(({ g }, k) => [String(g), 'Độ ' + g, counts[k]])];
   $('#filters').innerHTML = chips.map(([k, l, c]) =>
-    `<button class="chip ${k === 'diff' || k === 'docdiff' ? 'diffchip' : ''} ${state.filter === k ? 'active' : ''}" data-f="${k}" ${k === 'diff' ? 'title="Ảnh bạn đã phân loại mà người khác chọn độ khác"' : ''}>${l}<span class="c">${c}</span></button>`).join('');
+    `<button class="chip ${['diff', 'docdiff', 'stumiss'].includes(k) ? 'diffchip' : ''} ${state.filter === k ? 'active' : ''}" data-f="${k}" ${k === 'diff' ? 'title="Ảnh bạn đã phân loại mà người khác chọn độ khác"' : ''}>${l}<span class="c">${c}</span></button>`).join('');
   $('#filters').querySelectorAll('.chip').forEach(c => c.onclick = () => {
     state.filter = c.dataset.f;
     const v = view();
@@ -407,7 +410,7 @@ function renderThumbs() {
   box.querySelectorAll('.thumb').forEach(t => t.onclick = e => {
     const id = Number(t.dataset.id);
     if (e.target.dataset.del) return deleteImages([id]);
-    if (state.pick) { const img = state.images.find(i => i.id === id); if (!canDelete(img)) return toast('Chỉ xoá được ảnh do bạn tải lên'); state.pick.has(id) ? state.pick.delete(id) : state.pick.add(id); updatePickBar(); return renderThumbs(); }
+    if (state.pick) { const img = state.images.find(i => i.id === id); if (!canDelete(img)) return toast('Chỉ quản trị viên được xoá ảnh'); state.pick.has(id) ? state.pick.delete(id) : state.pick.add(id); updatePickBar(); return renderThumbs(); }
     select(id);
   });
   box.querySelector('.current')?.scrollIntoView({ block: 'nearest' });
@@ -435,6 +438,17 @@ function showCurrent() {
 
 function renderDiffBar(img) {
   const bar = $('#diffBar');
+  bar.classList.remove('agree', 'miss');
+  if (img && amDoctor() && img.grade !== null) {   // bác sĩ: phân loại xong thấy ngay kết quả sinh viên
+    const sl = studentLine(img), list = state.images.filter(i => stuMatch(i) === false), k = list.indexOf(img);
+    if (sl.cls) bar.classList.add(sl.cls);
+    bar.innerHTML = `${sl.html}<span class="dact">${list.length && (k < 0 || list.length > 1) ? `<button class="link" id="diffNext">Ảnh không khớp ${k >= 0 ? 'tiếp theo ' : ''}(${list.length}) →</button>` : ''}
+      <button class="link" id="diffLink" title="Sao chép đường dẫn mở thẳng tới ảnh này">🔗 Sao chép đường dẫn</button></span>`;
+    bar.classList.remove('hidden');
+    $('#diffNext')?.addEventListener('click', () => { state.filter = 'stumiss'; renderAll(); select(list[(k + 1) % list.length].id); });
+    $('#diffLink').onclick = () => copyImageLink(img);
+    return;
+  }
   const doc = img ? docOf(img) : null;
   if (!img || (!isDiff(img) && doc === null)) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
   const list = state.images.filter(isDiff), k = list.indexOf(img);
@@ -519,6 +533,11 @@ async function setGrade(g) {
   img.grade = g; // cập nhật lạc quan
   const ok = await save(img, { grade: g, graded_at: g === null ? null : new Date().toISOString() });
   if (!ok) img.grade = prev;
+  if (ok && g !== null && amDoctor()) {
+    const r = studentRef([...(img.others || new Map())]);
+    toast(!r ? 'Chưa có sinh viên phân loại ảnh này' : g === 5 ? `Sinh viên chọn ${r.grade !== null ? 'độ ' + r.grade : 'hoà'}`
+      : r.grade === null ? `Sinh viên hoà giữa độ ${r.top.join(' và ')}` : r.grade === g ? `✓ Khớp – sinh viên chọn độ ${r.grade} (${r.n}/${r.total})` : `✗ Không khớp – sinh viên chọn độ ${r.grade} (${r.n}/${r.total}), bạn chọn độ ${g}`);
+  }
   const nv = view();
   renderAll();
   if (ok && $('#autoNext').checked && g !== null) {
@@ -541,7 +560,12 @@ $('#note').addEventListener('input', () => {
 });
 
 // ---------- XOÁ ẢNH ----------
-const canDelete = img => !!img && (img.user_id === state.user?.id || state.isAdmin);
+const canDelete = img => !!img && state.isAdmin;
+// giao diện chỉ quản trị viên mới thấy: xoá, gộp lô, thùng rác
+function applyAdminUi() {
+  const a = !!state.isAdmin;
+  ['#pickMode', '#mergeBtn', '#trashBtn'].forEach(sel => $(sel)?.classList.toggle('hidden', !a));
+}
 async function deleteImages(ids) {
   const imgs = ids.map(id => state.images.find(i => i.id === id)).filter(canDelete);
   if (!imgs.length) return toast('Chỉ xoá được ảnh do bạn tải lên');
@@ -738,6 +762,32 @@ function doctorRef(entries, exclude) {
   const g = entries.filter(([u, x]) => u !== exclude && isDoctor(u) && x !== null && x !== 5).map(([, x]) => x);
   if (!g.length) return null;
   const m = modeOf(g); return m.length === 1 ? m[0] : null;
+}
+// kết quả của sinh viên cho một ảnh: độ được nhiều sinh viên chọn nhất (không tính độ 5)
+function studentRef(entries) {
+  const g = entries.filter(([u, x]) => !isDoctor(u) && x !== null && x !== 5).map(([, x]) => x);
+  if (!g.length) return null;
+  const counts = [0, 0, 0, 0, 0]; g.forEach(x => counts[x]++);
+  const n = Math.max(...counts), top = counts.map((c, i) => c === n ? i : -1).filter(i => i >= 0);
+  return { grade: top.length === 1 ? top[0] : null, top, n, total: g.length, counts };
+}
+const amDoctor = () => state.myRole === 'doctor';
+// bác sĩ: so độ của mình với kết quả sinh viên -> true (khớp) / false (không khớp) / null (chưa so được)
+function stuMatch(i) {
+  if (!amDoctor() || i.grade === null || i.grade === 5) return null;
+  const r = studentRef([...(i.others || new Map())]);
+  return r && r.grade !== null ? r.grade === i.grade : null;
+}
+function studentLine(img) {
+  const r = studentRef([...(img.others || new Map())]);
+  if (!r) return { cls: '', html: '<span class="dmsg">🎓 Chưa có sinh viên nào phân loại ảnh này</span>' };
+  const dist = r.counts.map((c, g) => c ? `<span class="dchip">Độ ${g}: <b>${c}</b></span>` : '').join('');
+  if (img.grade === 5) return { cls: '', html: `<span class="dmsg">🎓 Bạn chọn “Cân nhắc” · sinh viên đa số chọn ${r.grade !== null ? 'độ ' + r.grade : 'hoà'}</span>${dist}` };
+  if (r.grade === null) return { cls: '', html: `<span class="dmsg">🎓 Sinh viên hoà giữa độ ${r.top.join(' và ')} (mỗi độ ${r.n}/${r.total} phiếu) – chưa xác định</span>${dist}` };
+  const share = `${r.n}/${r.total} phiếu, ${Math.round(r.n / r.total * 100)}%`;
+  return r.grade === img.grade
+    ? { cls: 'agree', html: `<span class="dmsg ok">✓ Khớp – sinh viên chọn độ ${r.grade} (${share})</span>${dist}` }
+    : { cls: 'miss', html: `<span class="dmsg bad">✗ Không khớp – sinh viên chọn độ ${r.grade} (${share}), bạn chọn độ ${img.grade}</span>${dist}` };
 }
 const nameOfUser = id => id === state.user?.id ? displayName(state.user.email) : (state.profiles.find(p => p.id === id)?.username || '?');
 function renderScope() {
@@ -1536,7 +1586,7 @@ function computeSummary(images, ratings, batchNames) {
   ratings.forEach(r => { if (!byImg.has(r.image_id)) byImg.set(r.image_id, new Map()); byImg.get(r.image_id).set(r.user_id, r.grade); });
   const raters = [...new Set(ratings.map(r => r.user_id))].sort((a, b) => nameOfUser(a).localeCompare(nameOfUser(b)));
   const per = new Map(raters.map(u => [u, { u, n: 0, dist: [0, 0, 0, 0, 0, 0], sum: 0, cnt04: 0, agree: 0, agreeN: 0, doc: 0, docN: 0 }]));
-  let stuDoc = 0, stuDocN = 0;
+  let stuDoc = 0, stuDocN = 0, consOk = 0, consN = 0;
   let multi = 0, full = 0, within1 = 0, within1N = 0, review = 0;
   const disagree = [];
   const pair = new Map(); const pk = (a, b) => a < b ? a + '|' + b : b + '|' + a;
@@ -1545,6 +1595,8 @@ function computeSummary(images, ratings, batchNames) {
     const entries = [...m.entries()], gs = entries.map(([, g]) => g);
     if (gs.includes(5)) review++;
     entries.forEach(([u, g]) => { const p = per.get(u); p.n++; p.dist[g]++; if (g <= 4) { p.sum += g; p.cnt04++; } });
+    { const dref = doctorRef(entries), sref = studentRef(entries);
+      if (dref !== null && sref && sref.grade !== null) { consN++; if (dref === sref.grade) consOk++; } }
     entries.forEach(([u, g]) => {
       const ref = doctorRef(entries, u); if (ref === null) return;
       const p = per.get(u); p.docN++; if (g === ref) p.doc++;
@@ -1564,7 +1616,7 @@ function computeSummary(images, ratings, batchNames) {
     if (!same) disagree.push({ im, entries, spread: num.length >= 2 ? Math.max(...num) - Math.min(...num) : 0, has5: gs.includes(5), batch: batchNames.get(im.batch_id) });
   });
   disagree.sort((a, b) => b.spread - a.spread || b.entries.length - a.entries.length);
-  return { images, ratings, raters, per, pair, pk, multi, full, within1, within1N, review, disagree, stuDoc, stuDocN,
+  return { images, ratings, raters, per, pair, pk, multi, full, within1, within1N, review, disagree, stuDoc, stuDocN, consOk, consN,
     gradedImgs: byImg.size, total: images.length };
 }
 
@@ -1606,7 +1658,8 @@ function renderSummary() {
     tile('Đồng thuận hoàn toàn', pct(d.full, d.multi), d.multi ? `${d.full}/${d.multi} ảnh mọi người cùng độ` : 'cần ≥ 2 người phân loại cùng ảnh') +
     tile('Lệch tối đa 1 độ', pct(d.within1, d.within1N), d.within1N ? `${d.within1}/${d.within1N} ảnh (không tính độ 5)` : '') +
     tile('Ảnh có người chọn “Cân nhắc”', d.review) +
-    tile('Sinh viên trùng bác sĩ', pct(d.stuDoc, d.stuDocN), d.stuDocN ? `${d.stuDoc}/${d.stuDocN} lượt có kết quả bác sĩ để đối chiếu` : 'chưa có ảnh nào bác sĩ đã phân loại');
+    tile('Kết quả sinh viên khớp bác sĩ', pct(d.consOk, d.consN), d.consN ? `${d.consOk}/${d.consN} ảnh (độ sinh viên chọn nhiều nhất = độ bác sĩ)` : 'cần ảnh có cả bác sĩ và sinh viên phân loại') +
+    tile('Từng lượt sinh viên trùng bác sĩ', pct(d.stuDoc, d.stuDocN), d.stuDocN ? `${d.stuDoc}/${d.stuDocN} lượt có kết quả bác sĩ để đối chiếu` : 'chưa có ảnh nào bác sĩ đã phân loại');
 
   // theo từng người phân loại
   $('#sumRaterLegend').innerHTML = GRADES.map(g => `<span class="lg"><i class="cg${g.g}"></i>${g.g} ${g.label}</span>`).join('');
