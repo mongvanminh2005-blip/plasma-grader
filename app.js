@@ -481,6 +481,7 @@ async function openFromHash() {
 }
 window.addEventListener('hashchange', () => state.user && openFromHash());
 function select(id) {
+  if (id !== state.currentId) hideDocResult();
   state.currentId = id;
   showCurrent();
   document.querySelectorAll('.thumb').forEach(t => t.classList.toggle('current', Number(t.dataset.id) === id));
@@ -533,13 +534,9 @@ async function setGrade(g) {
   img.grade = g; // cập nhật lạc quan
   const ok = await save(img, { grade: g, graded_at: g === null ? null : new Date().toISOString() });
   if (!ok) img.grade = prev;
-  if (ok && g !== null && amDoctor()) {
-    const r = studentRef([...(img.others || new Map())]);
-    toast(!r ? 'Chưa có sinh viên phân loại ảnh này' : g === 5 ? `Sinh viên chọn ${r.grade !== null ? 'độ ' + r.grade : 'hoà'}`
-      : r.grade === null ? `Sinh viên hoà giữa độ ${r.top.join(' và ')}` : r.grade === g ? `✓ Khớp – sinh viên chọn độ ${r.grade} (${r.n}/${r.total})` : `✗ Không khớp – sinh viên chọn độ ${r.grade} (${r.n}/${r.total}), bạn chọn độ ${g}`);
-  }
   const nv = view();
   renderAll();
+  if (ok && g !== null && amDoctor()) { showCurrent(); showDocResult(img); loadBatches(); return; }   // bác sĩ: xem kết quả, không tự chuyển
   if (ok && $('#autoNext').checked && g !== null) {
     const nextPos = nv.some(i => i.id === img.id) ? pos + 1 : pos;
     if (nv[nextPos]) select(nv[nextPos].id);
@@ -750,6 +747,7 @@ async function loadProfiles() {
   state.profiles = check(await sb.from('profiles').select('id, username, role').order('username'));
   const me = state.profiles.find(p => p.id === state.user?.id);
   state.myRole = me?.role || 'student';
+  $('#autoNextBox').classList.toggle('hidden', state.myRole === 'doctor');
   $('#myRole').textContent = ROLE_LABEL[state.myRole]; $('#myRole').dataset.r = state.myRole; $('#myRole').classList.remove('hidden');
   renderScope();
 }
@@ -778,6 +776,30 @@ function stuMatch(i) {
   const r = studentRef([...(i.others || new Map())]);
   return r && r.grade !== null ? r.grade === i.grade : null;
 }
+// bảng kết quả lớn cho bác sĩ ngay sau khi bấm phân loại
+function showDocResult(img) {
+  const box = $('#docResult'), r = studentRef([...(img.others || new Map())]), g = img.grade;
+  let cls = 'none', icon = '🎓', title, sub = '';
+  if (!r) { title = 'Chưa có sinh viên phân loại ảnh này'; sub = `Bạn chọn độ ${g}`; }
+  else if (g === 5) { title = 'Bạn chọn “Cân nhắc lựa chọn”'; sub = r.grade !== null ? `Sinh viên chọn độ ${r.grade} (${r.n}/${r.total} phiếu)` : `Sinh viên hoà giữa độ ${r.top.join(' và ')}`; }
+  else if (r.grade === null) { cls = 'tie'; icon = '≈'; title = 'Chưa xác định'; sub = `Sinh viên hoà giữa độ ${r.top.join(' và ')} (mỗi độ ${r.n}/${r.total} phiếu) · bạn chọn độ ${g}`; }
+  else if (r.grade === g) { cls = 'ok'; icon = '✓'; title = 'KHỚP'; sub = `Sinh viên chọn độ ${r.grade} – ${r.n}/${r.total} phiếu (${Math.round(r.n / r.total * 100)}%) · bạn chọn độ ${g}`; }
+  else { cls = 'bad'; icon = '✗'; title = 'KHÔNG KHỚP'; sub = `Sinh viên chọn độ ${r.grade} – ${r.n}/${r.total} phiếu (${Math.round(r.n / r.total * 100)}%) · bạn chọn độ ${g}`; }
+  const bars = r ? `<div class="dr-votes">${r.counts.map((c, k) => `<div class="dr-v ${k === g ? 'mine' : ''} ${r.grade === k ? 'top' : ''}"><span>Độ ${k}</span><div class="qbar"><i class="cg${k}" style="width:${r.total ? c / r.total * 100 : 0}%"></i></div><b>${c}</b></div>`).join('')}</div>` : '';
+  box.className = 'doc-result ' + cls;
+  box.innerHTML = `<div class="dr-card"><div class="dr-icon">${icon}</div><div class="dr-title">${title}</div><div class="dr-sub">${esc(sub)}</div>${bars}
+    <div class="dr-act"><button class="btn outline" id="drClose">Xem lại ảnh</button><button class="btn primary" id="drNext">Ảnh tiếp theo →</button></div>
+    <div class="dr-hint">Enter: ảnh tiếp theo · Esc: đóng</div></div>`;
+  $('#drClose').onclick = hideDocResult;
+  $('#drNext').onclick = () => { hideDocResult(); step(1); };
+  setTimeout(() => $('#drNext')?.focus(), 0);
+}
+function hideDocResult() { $('#docResult').classList.add('hidden'); $('#docResult').innerHTML = ''; }
+document.addEventListener('keydown', e => {
+  if ($('#docResult').classList.contains('hidden')) return;
+  if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); hideDocResult(); }
+  else if (e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); hideDocResult(); step(1); }
+}, true);
 function studentLine(img) {
   const r = studentRef([...(img.others || new Map())]);
   if (!r) return { cls: '', html: '<span class="dmsg">🎓 Chưa có sinh viên nào phân loại ảnh này</span>' };

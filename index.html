@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath d=%27M16 2C16 2 6 14 6 20a10 10 0 0 0 20 0C26 14 16 2 16 2z%27 fill=%27%23e9a93a%27/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="style.css?v=33" />
+  <link rel="stylesheet" href="style.css?v=34" />
 </head>
 <body>
   <!-- ========== AUTH ========== -->
@@ -159,6 +159,7 @@
           <div class="ws-body">
             <div class="viewer" id="viewerBox">
               <div class="stage" id="stage">
+                <div class="doc-result hidden" id="docResult"></div>
                 <div class="zoomer" id="zoomer">
                   <img id="mainImg" alt="" />
                   <svg id="overlay" class="overlay" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet"></svg>
@@ -205,7 +206,7 @@
                 <div class="gp-label">Chọn độ <span class="muted">— phím tắt 0–5</span></div>
                 <div class="grades" id="grades"></div>
                 <div class="gp-foot">
-                  <span class="gp-switches"><label class="switch"><input type="checkbox" id="autoNext" checked /><span></span> Tự chuyển ảnh tiếp theo</label>
+                  <span class="gp-switches"><label class="switch" id="autoNextBox"><input type="checkbox" id="autoNext" checked /><span></span> Tự chuyển ảnh tiếp theo</label>
                   <label class="switch" title="Tự chạy AI khoanh vùng khi mở ảnh chưa có vùng"><input type="checkbox" id="autoSeg" checked /><span></span> Tự khoanh vùng AI</label></span>
                   <button class="link" id="clearGrade">Bỏ chọn độ</button>
                 </div>
@@ -378,9 +379,9 @@
   </div>
 
   <script src="vendor/supabase.js?v=2.119.2" integrity="sha384-A97u3Qnt9GZHURO9YJZRe7VQgGUeFzcv6I1oIGnUTxQrCxnpQMwR0/G8F2zt9abZ"></script>
-  <script src="config.js?v=33"></script>
-  <script src="seg.js?v=33"></script>
-  <script src="color.js?v=33"></script>
-  <script src="app.js?v=33"></script>
+  <script src="config.js?v=34"></script>
+  <script src="seg.js?v=34"></script>
+  <script src="color.js?v=34"></script>
+  <script src="app.js?v=34"></script>
 </body>
 </html>
