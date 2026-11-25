@@ -60,7 +60,7 @@ function viError(m = '') {
   if (/already registered|already exists/i.test(m)) return 'Tên đăng nhập này đã có người dùng';
   if (/Email not confirmed/i.test(m)) return 'Tài khoản chưa được xác nhận – cần tắt "Confirm email" trong Supabase';
   if (/invalid format|Unable to validate email/i.test(m)) return 'Tên đăng nhập không hợp lệ';
-  if (/Password should|weak password|password.*(length|characters)/i.test(m)) return 'Mật khẩu chưa đủ mạnh: tối thiểu 8 ký tự, có chữ và số';
+  if (/Password should|weak password|password.*(length|characters)/i.test(m)) return 'Mật khẩu cần ít nhất 6 ký tự (giới hạn tối thiểu của hệ thống đăng nhập)';
   if (/rate limit/i.test(m)) return 'Thao tác quá nhanh, vui lòng thử lại sau ít phút';
   if (/Failed to fetch|NetworkError/i.test(m)) return 'Mất kết nối mạng';
   return m || 'Có lỗi xảy ra';
@@ -93,12 +93,9 @@ function showAuth() {
   if (state.channel) { sb.removeChannel(state.channel); state.channel = null; }
   $('#app').classList.add('hidden'); $('#auth').classList.remove('hidden');
 }
-// mật khẩu: ≥ 8 ký tự, có cả chữ và số, không trùng tên đăng nhập
-function passwordProblem(p, user = $('#authForm')?.username?.value || '') {
-  if (p.length < 8) return 'Mật khẩu tối thiểu 8 ký tự';
-  if (!/[a-zA-Z]/.test(p) || !/\d/.test(p)) return 'Mật khẩu phải có cả chữ và số';
-  if (user && p.toLowerCase().includes(user.trim().toLowerCase())) return 'Mật khẩu không được chứa tên đăng nhập';
-  return '';
+// mật khẩu: không đặt yêu cầu riêng; chỉ báo trước giới hạn tối thiểu 6 ký tự của Supabase
+function passwordProblem(p) {
+  return p.length < 6 ? 'Mật khẩu cần ít nhất 6 ký tự (giới hạn tối thiểu của hệ thống đăng nhập)' : '';
 }
 function setMode(mode) {
   state.mode = mode;
@@ -109,8 +106,7 @@ function setMode(mode) {
   $('#authForm').password.autocomplete = mode === 'register' ? 'new-password' : 'current-password';
   // yêu cầu độ mạnh chỉ áp dụng khi tạo tài khoản (người cũ có thể còn mật khẩu ngắn)
   const pw = $('#authForm').password;
-  if (mode === 'register') { pw.minLength = 8; pw.placeholder = 'Tối thiểu 8 ký tự, có chữ và số'; }
-  else { pw.removeAttribute('minlength'); pw.placeholder = 'Mật khẩu'; }
+  pw.removeAttribute('minlength'); pw.placeholder = 'Mật khẩu';
   $('#authSubmit').textContent = mode === 'register' ? 'Tạo tài khoản' : 'Đăng nhập';
   $('#authError').textContent = '';
 }
@@ -924,7 +920,7 @@ async function adminAction(act, u) {
   try {
     if (act === 'view') return viewUserData(u.id);
     if (act === 'pass') {
-      const p = prompt(`Nhập mật khẩu mới cho "${u.username}" (tối thiểu 8 ký tự, có chữ và số):`);
+      const p = prompt(`Nhập mật khẩu mới cho "${u.username}":`);
       if (p === null) return;
       if (passwordProblem(p, u.username)) return toast(passwordProblem(p, u.username));
       check(await sb.rpc('admin_set_password', { target: u.id, new_password: p }));
