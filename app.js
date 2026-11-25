@@ -147,9 +147,6 @@ $('#logoutBtn').onclick = () => sb.auth.signOut();
 // ---------- APP ----------
 async function startApp(user) {
   if (state.user?.id === user.id && !$('#app').classList.contains('hidden')) return;
-  // tài khoản phải được quản trị viên duyệt
-  const ok = await sb.rpc('is_approved');
-  if (ok.error || !ok.data) return showPending(user);
   $('#pending').classList.add('hidden');
   state.user = user;
   startIdleTimer();
@@ -821,22 +818,19 @@ async function refreshAdmin() {
   } catch (e) { toast(e.message); }
 }
 function renderUsers() {
-  const locked = state.users.filter(u => !u.approved).length;
   const nDoc = state.users.filter(u => isDoctor(u.id)).length;
-  $('#adminUserCount').textContent = `${state.users.length} tài khoản · ${nDoc} bác sĩ · ${state.users.length - nDoc} sinh viên` + (locked ? ` · ${locked} bị khoá` : '');
+  $('#adminUserCount').textContent = `${state.users.length} tài khoản · ${nDoc} bác sĩ · ${state.users.length - nDoc} sinh viên`;
   $('#pendBadge').classList.add('hidden');
   $('#adminUsers').innerHTML = state.users.map(u => {
     const me = u.id === state.user.id;
     return `<tr data-id="${u.id}">
       <td><span class="uname">${esc(u.username)}</span>${u.is_admin ? '<span class="role">Quản trị</span>' : ''}${me ? '<span class="you">(bạn)</span>' : ''}</td>
       <td><select class="role-sel" data-role="1">${['student', 'doctor'].map(r => `<option value="${r}" ${roleOf(u.id) === r ? 'selected' : ''}>${ROLE_LABEL[r]}</option>`).join('')}</select></td>
-      <td>${u.approved ? '<span class="st ok">Hoạt động</span>' : '<span class="st wait">🔒 Đã khoá</span>'}</td>
       <td>${dateStr(u.created_at)}</td>
       <td>${u.last_sign_in_at ? new Date(u.last_sign_in_at).toLocaleString('vi-VN') : '<span class="muted">chưa đăng nhập</span>'}</td>
       <td class="num">${u.batches}</td><td class="num">${u.images}</td><td class="num">${u.graded}</td>
       <td class="num">${fmtBytes(u.storage_bytes)}</td>
       <td><div class="actions">
-        ${me ? '' : (u.approved ? '<button class="btn outline" data-act="lock">Khoá</button>' : '<button class="btn primary" data-act="approve">Mở khoá</button>')}
         <button class="btn outline" data-act="view">Xem dữ liệu</button>
         <button class="btn outline" data-act="pass">Đặt lại mật khẩu</button>
         ${me ? '' : `<button class="btn outline" data-act="role">${u.is_admin ? 'Bỏ quản trị' : 'Cấp quản trị'}</button>
@@ -857,12 +851,6 @@ function renderUsers() {
 async function adminAction(act, u) {
   try {
     if (act === 'view') return viewUserData(u.id);
-    if (act === 'approve' || act === 'lock') {
-      if (act === 'lock' && !confirm(`Khoá tài khoản "${u.username}"? Người này bị đăng xuất khỏi mọi thiết bị và không xem được dữ liệu nữa (dữ liệu vẫn giữ nguyên, có thể mở khoá lại).`)) return;
-      check(await sb.rpc('admin_set_approved', { target: u.id, approve: act === 'approve' }));
-      toast(act === 'approve' ? `Đã mở khoá ${u.username}` : `Đã khoá ${u.username}`);
-      return refreshAdmin();
-    }
     if (act === 'pass') {
       const p = prompt(`Nhập mật khẩu mới cho "${u.username}" (tối thiểu 8 ký tự, có chữ và số):`);
       if (p === null) return;

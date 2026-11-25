@@ -31,3 +31,13 @@ begin
 end $$;
 revoke all on function public.admin_set_role(uuid, text) from public, anon;
 grant execute on function public.admin_set_role(uuid, text) to authenticated;
+
+-- 3) Bỏ hẳn chức năng duyệt/khoá tài khoản: mọi tài khoản đã đăng nhập đều dùng được
+update public.profiles set approved = true, approved_at = coalesce(approved_at, now()) where not approved;
+create or replace function public.is_approved() returns boolean
+language sql stable security definer set search_path = '' as $$
+  select (select auth.uid()) is not null;
+$$;
+revoke all on function public.is_approved() from public, anon;
+grant execute on function public.is_approved() to authenticated;
+revoke execute on function public.admin_set_approved(uuid, boolean) from authenticated;
