@@ -996,7 +996,8 @@ async function walk(entry, prefix, out) {
 }
 
 const RAW_EXT = /\.(cr2|cr3|nef|nrw|arw|dng|orf|rw2|raf|pef|srw)$/i;
-const isImage = f => f.type.startsWith('image/') || RAW_EXT.test(f.name) || /\.(jpe?g|png|gif|webp|bmp|tiff?|heic)$/i.test(f.name);
+const HEIC_EXT = /\.(heic|heif|hif)$/i;
+const isImage = f => f.type.startsWith('image/') || RAW_EXT.test(f.name) || /\.(jpe?g|png|gif|webp|bmp|tiff?|heic|heif|hif)$/i.test(f.name);
 const extOf = f => (f.name.split('.').pop() || 'jpg').toLowerCase();
 
 // ----- Đọc ảnh RAW (.cr2, .nef, .arw, .dng…): lấy ảnh JPEG mà máy ảnh nhúng sẵn trong file -----
@@ -1102,11 +1103,12 @@ async function cropToTube(img, regions, maxH) {
 //  - "Nén ảnh": thu nhỏ ảnh còn lại về tối đa 1600px
 async function prepare(file) {
   const raw = RAW_EXT.test(file.name), compress = $('#compress').checked, crop = segOn() && $('#cropTube').checked;
-  const decodable = raw || /^image\/(jpeg|png|webp|bmp)$/.test(file.type);
-  if (!decodable || (!raw && !compress && !crop)) return { blob: file, ext: extOf(file), regions: null };
+  const heic = HEIC_EXT.test(file.name) || /^image\/hei[cf]/.test(file.type);
+  const decodable = raw || heic || /^image\/(jpeg|png|webp|bmp)$/.test(file.type);
+  if (!decodable || (!raw && !heic && !compress && !crop)) return { blob: file, ext: extOf(file), regions: null };
   let src, orientation = 1;
   if (raw) ({ bmp: src, orientation } = await decodeRaw(file));
-  else src = await createImageBitmap(file);
+  else src = await decodeImageFile(file);
   const img = orientCanvas(src, orientation);
   try {
     let regions = null;
@@ -1243,6 +1245,47 @@ const loadOrt = () => window.ort ? Promise.resolve() : (ortLoading ||= new Promi
   sc.onerror = () => { ortLoading = null; rej(new Error('Không tải được thư viện AI')); };
   document.head.appendChild(sc);
 }));
+// ---------- đọc ảnh: JPG/PNG… bằng trình duyệt, HEIC/HEIF (iPhone) bằng libheif ----------
+const HEIF_URL = 'vendor/libheif/libheif.js?v=1.23.5', HEIF_SRI = 'sha384-VEbrgTthZ3xiJrRrD1QszeA+mvSzQAazOjulZBOV9mXAH+SfRdtQWjzL6E0JYlmP';
+let heifLib = null, heifLoading = null;
+function loadHeif() {
+  return heifLib ? Promise.resolve(heifLib) : (heifLoading ||= (async () => {
+    await new Promise((res, rej) => {
+      const sc = document.createElement('script'); sc.src = HEIF_URL; sc.integrity = HEIF_SRI; sc.onload = res;
+      sc.onerror = () => rej(new Error('Không tải được bộ đọc ảnh HEIC'));
+      document.head.appendChild(sc);
+    });
+    const wasmBinary = await (await fetch('vendor/libheif/libheif.wasm?v=1.23.5')).arrayBuffer();
+    let lib = window.libheif({ wasmBinary }); if (lib && lib.then) lib = await lib;
+    return (heifLib = lib);
+  })().catch(e => { heifLoading = null; throw e; }));
+}
+async function isHeif(file) {
+  const b = new Uint8Array(await file.slice(4, 12).arrayBuffer());
+  const s = String.fromCharCode(...b);
+  return s.startsWith('ftyp') && /^(heic|heix|hevc|hevx|heim|heis|mif1|msf1)/.test(s.slice(4));
+}
+async function decodeHeif(file) {
+  const lib = await loadHeif();
+  const imgs = new lib.HeifDecoder().decode(new Uint8Array(await file.arrayBuffer()));
+  if (!imgs?.length) throw new Error('Tệp HEIC không có ảnh');
+  const im = imgs[0], w = im.get_width(), h = im.get_height(), data = new ImageData(w, h);
+  await new Promise((res, rej) => im.display(data, d => d ? res() : rej(new Error('Không giải mã được ảnh HEIC'))));
+  imgs.forEach(x => x.free?.());
+  const c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').putImageData(data, 0, 0);
+  return createImageBitmap(c);
+}
+async function decodeImageFile(file) {
+  if (HEIC_EXT.test(file.name) || await isHeif(file).catch(() => false)) {
+    try { return await createImageBitmap(file); } catch { return decodeHeif(file); }   // ảnh iPhone (kể cả HEIC đặt đuôi .JPG)
+  }
+  try { return await createImageBitmap(file); } catch (e) {
+    try {   // thử lại bằng thẻ <img>
+      const url = URL.createObjectURL(file), img = new Image(); img.src = url;
+      try { await img.decode(); return await createImageBitmap(img); } finally { URL.revokeObjectURL(url); }
+    } catch { throw new Error('Không đọc được ảnh này (định dạng chưa hỗ trợ hoặc tệp bị hỏng)'); }
+  }
+}
 async function ensureModel() {
   await loadOrt();
   if (!TubeSeg.ready) await TubeSeg.load(p => setSeg('busy', `Đang tải mô hình AI… ${Math.round(p * 100)}%`));
@@ -2250,7 +2293,7 @@ function quickRender() {
   $('#quickList').innerHTML = quickItems.map(q => resultCardHtml({ name: q.name, url: q.url, poly: q.poly, feat: q.res?.feat, pred: q.res?.pred, error: q.error, step: q.step || 'Đang chờ…' })).join('');
 }
 async function quickAdd(files) {
-  files = [...files].filter(f => RAW_EXT.test(f.name) || f.type.startsWith('image/'));
+  files = [...files].filter(isImage);
   if (!files.length) return toast('Hãy chọn tệp ảnh');
   const items = files.map(f => ({ file: f, name: f.name }));
   quickItems.unshift(...items.reverse()); items.reverse();
@@ -2261,7 +2304,7 @@ async function quickAdd(files) {
       q.step = 'Đang đọc ảnh…'; quickRender();
       let src, orientation = 1;
       if (RAW_EXT.test(q.file.name)) ({ bmp: src, orientation } = await decodeRaw(q.file));
-      else src = await createImageBitmap(q.file);
+      else src = await decodeImageFile(q.file);
       const img = orientCanvas(src, orientation);
       q.step = 'AI đang khoanh vùng ống nghiệm…'; quickRender();
       await ensureModel();
