@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath d=%27M16 2C16 2 6 14 6 20a10 10 0 0 0 20 0C26 14 16 2 16 2z%27 fill=%27%23e9a93a%27/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="style.css?v=38" />
+  <link rel="stylesheet" href="style.css?v=39" />
 </head>
 <body>
   <!-- ========== AUTH ========== -->
@@ -358,6 +358,17 @@
               <p class="muted small">Bản sao lưu gồm: tài khoản (không có mật khẩu), lô, ảnh, vùng khoanh, điểm và ghi chú của từng người, kèm file CSV mở bằng Excel.</p>
             </div>
           </div>
+          <div class="panel backup-panel">
+            <div class="panel-head"><h3>🧠 Dữ liệu huấn luyện AI khoanh vùng</h3><span class="muted" id="trainNote"></span></div>
+            <div class="backup-body">
+              <p>Xuất ảnh kèm vùng khoanh theo định dạng <b>YOLO-seg</b> (images/, labels/, data.yaml) để huấn luyện lại mô hình bằng <code>train_yolo26_v3.py</code>.</p>
+              <div class="mb-actions">
+                <button class="btn primary sm" id="trainManual">Xuất ảnh đã chỉnh tay (khuyên dùng)</button>
+                <button class="btn outline sm" id="trainAll">Xuất mọi ảnh có khoanh vùng</button>
+              </div>
+              <p class="muted small">Cách làm: tải ảnh điện thoại lên với công tắc <b>"Chỉ lưu phần ống nghiệm" TẮT</b> (giữ cả khung hình) → mở ảnh, bấm sửa vùng khoanh cho đúng → xuất ở đây.</p>
+            </div>
+          </div>
           <div class="panel">
             <div class="panel-head"><h3>Tài khoản</h3><span class="muted" id="adminUserCount"></span></div>
             <div class="table-wrap"><table class="users">
@@ -379,9 +390,9 @@
   </div>
 
   <script src="vendor/supabase.js?v=2.119.2" integrity="sha384-A97u3Qnt9GZHURO9YJZRe7VQgGUeFzcv6I1oIGnUTxQrCxnpQMwR0/G8F2zt9abZ"></script>
-  <script src="config.js?v=38"></script>
-  <script src="seg.js?v=38"></script>
-  <script src="color.js?v=38"></script>
-  <script src="app.js?v=38"></script>
+  <script src="config.js?v=39"></script>
+  <script src="seg.js?v=39"></script>
+  <script src="color.js?v=39"></script>
+  <script src="app.js?v=39"></script>
 </body>
 </html>

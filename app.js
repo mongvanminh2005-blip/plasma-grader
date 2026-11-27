@@ -1980,6 +1980,54 @@ function makeZip(files) { // files: [{ name, data: Uint8Array }]
 }
 const safeName = s => String(s || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/^\.+/, '_').trim().slice(0, 120) || '_';
 
+// ---------- XUẤT DỮ LIỆU HUẤN LUYỆN (YOLO-seg) ----------
+async function exportTrainSet(manualOnly) {
+  const prog = $('#uploadProgress'); prog.classList.remove('hidden');
+  const setP = (pct, label) => { $('#uploadBar').style.width = pct + '%'; $('#uploadPct').textContent = Math.round(pct) + '%'; $('#uploadLabel').textContent = label; };
+  try {
+    setP(2, 'Đang đọc danh sách ảnh…');
+    const names = REGION_CLASSES.map(c => c.name);   // cap, Headspace, plasma, bloodcell – đúng thứ tự data.yaml cũ
+    let images = (await fetchAll(() => sb.from('images').select('id, batch_id, rel_path, storage_path, regions, regions_source').is('deleted_at', null).not('regions', 'is', null).order('id')))
+      .filter(i => Array.isArray(i.regions) && i.regions.some(r => names.includes(r.name) && r.pts?.length >= 3) && !RAW_EXT.test(i.storage_path));
+    if (manualOnly) images = images.filter(i => i.regions_source === 'manual');
+    if (!images.length) throw new Error(manualOnly ? 'Chưa có ảnh nào được chỉnh tay vùng khoanh' : 'Chưa có ảnh nào có vùng khoanh');
+    await signUrls(images);
+    const enc = new TextEncoder(), files = [], rows = [['tep', 'tap', 'nguon_nhan', 'kieu_anh', 'lo', 'duong_dan_goc']];
+    const bname = new Map((await fetchAll(() => sb.from('batches').select('id, name').order('id'))).map(b => [b.id, b.name]));
+    let done = 0, failed = 0, next = 0, nTrain = 0, nVal = 0;
+    const worker = async () => {
+      while (next < images.length) {
+        const im = images[next++];
+        try {
+          const res = await fetch(urlOf(im)); if (!res.ok) throw new Error(res.status);
+          const buf = new Uint8Array(await res.arrayBuffer());
+          const split = (hash32('split:' + im.id) % 100) < 15 ? 'val' : 'train';
+          split === 'val' ? nVal++ : nTrain++;
+          const ext = (im.storage_path.split('.').pop() || 'jpg').toLowerCase(), base = `web_${im.id}`;
+          const lines = im.regions.filter(r => names.includes(r.name) && r.pts?.length >= 3)
+            .map(r => [names.indexOf(r.name), ...r.pts.flat().map(v => Math.min(1, Math.max(0, v)).toFixed(5))].join(' '));
+          files.push({ name: `images/${split}/${base}.${ext}`, data: buf });
+          files.push({ name: `labels/${split}/${base}.txt`, data: enc.encode(lines.join('\n') + '\n') });
+          const xs = im.regions.flatMap(r => r.pts.map(p => p[0])), wFrac = Math.max(...xs) - Math.min(...xs);
+          rows.push([`${base}.${ext}`, split, im.regions_source === 'manual' ? 'chinh tay' : 'AI', wFrac > 0.45 ? 'cat sat ong' : 'ca khung hinh', bname.get(im.batch_id) || '', im.rel_path]);
+        } catch (e) { failed++; console.error(im.rel_path, e); }
+        done++; setP(5 + done / images.length * 90, `Đang tải ảnh ${done}/${images.length}`);
+      }
+    };
+    await Promise.all(Array.from({ length: 6 }, worker));
+    files.push({ name: 'data.yaml', data: enc.encode(`# Xuat tu Plasma Grader ${new Date().toLocaleString('vi-VN')}\npath: .\ntrain: images/train\nval: images/val\nnc: ${names.length}\nnames: [${names.map(n => `'${n}'`).join(', ')}]\n`) });
+    files.push({ name: 'danh-sach.csv', data: enc.encode('\ufeff' + rows.map(r => r.map(v => /[",\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : v).join(',')).join('\r\n')) });
+    files.push({ name: 'DOC-TOI.txt', data: enc.encode(`Du lieu huan luyen YOLO-seg tu Plasma Grader\r\n- ${nTrain} anh train, ${nVal} anh val (chia co dinh 85/15 theo id anh)\r\n- Lop: ${names.map((n, i) => i + '=' + n).join(', ')}\r\n- danh-sach.csv: nguon nhan (chinh tay / AI) va kieu anh (ca khung hinh / cat sat ong)\r\n- Giai nen vao D:\\BME4\\DatasetWeb roi chay: python train_yolo26_v3.py\r\n`) });
+    setP(97, 'Đang đóng gói…');
+    const zip = makeZip(files);
+    downloadBlob(zip, `du-lieu-huan-luyen-${manualOnly ? 'chinh-tay' : 'tat-ca'}-${new Date().toISOString().slice(0, 10)}.zip`);
+    setP(100, `Đã xuất ${images.length - failed} ảnh (${nTrain} train · ${nVal} val) · ${fmtBytes(zip.size)}`);
+    if (failed) toast(`${failed} ảnh không tải được`);
+  } catch (e) { toast(e.message); $('#uploadLabel').textContent = '⚠ ' + e.message; }
+  setTimeout(() => prog.classList.add('hidden'), 4000);
+}
+$('#trainManual').onclick = () => exportTrainSet(true);
+$('#trainAll').onclick = () => exportTrainSet(false);
 async function runBackup(withImages) {
   const prog = $('#uploadProgress'); prog.classList.remove('hidden');
   const setP = (pct, label) => { $('#uploadBar').style.width = pct + '%'; $('#uploadPct').textContent = Math.round(pct) + '%'; $('#uploadLabel').textContent = label; };
