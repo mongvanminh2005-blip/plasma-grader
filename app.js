@@ -2244,21 +2244,78 @@ function colOneRun(run) {
   analyzeRow(r).then(draw);
 }
 // thẻ kết quả dùng chung cho "1 ảnh" và "Tải ảnh lên"
-function resultCardHtml({ name, sub = '', url, poly, feat, pred, error, step, extra = '' }) {
-  const head = `<div class="qimg">${url ? `<img src="${esc(url)}" alt="" />${poly ? `<svg viewBox="0 0 1 1" preserveAspectRatio="none"><polygon points="${poly}" /></svg>` : ''}` : '<div class="qwait">…</div>'}</div>`;
+// regions: các vùng AI (toạ độ 0..1 theo ảnh url); detail: hiện bảng thông số đầy đủ; key: để bật/tắt chi tiết
+function regionStats(regions) {
+  const best = {};
+  (regions || []).forEach(r => { if (r.pts?.length >= 3 && (!best[r.name] || (r.conf || 0) > (best[r.name].conf || 0))) best[r.name] = r; });
+  const ys = r => r.pts.map(p => p[1]), all = Object.values(best);
+  if (!all.length) return [];
+  const top = Math.min(...all.flatMap(ys)), tot = (Math.max(...all.flatMap(ys)) - top) || 1;
+  return REGION_CLASSES.map(c => { const r = best[c.name]; return { c, r, conf: r?.conf, frac: r ? (Math.max(...ys(r)) - Math.min(...ys(r))) / tot : null }; });
+}
+function regionOverlay(regions) {
+  const st = regionStats(regions).filter(x => x.r);
+  return st.map(({ c, r }) => `<polygon points="${r.pts.map(([x, y]) => `${x},${y}`).join(' ')}" style="stroke:${c.hex}" class="${c.name === 'plasma' ? 'pl' : ''}"><title>${c.label} ${Math.round((r.conf || 0) * 100)}%</title></polygon>`).join('');
+}
+function paramRows(feat, pred, regions) {
+  const m = PlasmaColor.model, L = feat.L * 100 / 255, a = feat.a - 128, b = feat.b - 128, h = ((feat.h % 360) + 360) % 360;
+  const sign = v => (v > 0 ? '+' : '') + v.toFixed(1);
+  const st = regionStats(regions);
+  const groups = [
+    ['Kết quả mô hình', [
+      ['Kết luận', pred.loai ? '<b class="tl">Loại</b> (độ 3–4)' : '<b class="tn">Nhận</b> (độ 0–2)'],
+      ['Xác suất Loại', `${(pred.pLoai * 100).toFixed(1)}% <span class="muted">(ngưỡng ${Math.round(m.reject.threshold * 100)}%)</span>`],
+      ['Độ ước tính', `${pred.grade} – ${GRADES.find(g => g.g === pred.grade)?.label || ''} <span class="muted">(${Math.round(pred.gradeProb * 100)}%)</span>`],
+    ]],
+    ['Màu huyết tương', [
+      ['Tên màu', `<span class="swatch" style="background:rgb(${Math.round(feat.R)},${Math.round(feat.G)},${Math.round(feat.B)})"></span>${esc(feat.color)}`],
+      ['L* (độ sáng)', L.toFixed(1)], ['a* (đỏ ↔ xanh lá)', sign(a)], ['b* (vàng ↔ xanh dương)', sign(b)],
+      ['C (độ đậm màu)', feat.C.toFixed(1)], ['h (góc màu)', h.toFixed(1) + '°'],
+      ['RGB', `${Math.round(feat.R)}, ${Math.round(feat.G)}, ${Math.round(feat.B)}`],
+      ['S (độ bão hoà)', `${Math.round(feat.S)} <span class="muted">/255</span>`],
+      ['r_chrom · g_chrom', `${feat.r_chrom.toFixed(3)} · ${feat.g_chrom.toFixed(3)}`],
+    ]],
+    ['Khoanh vùng AI', [
+      ...st.map(x => [`<i class="rdot" style="background:${x.c.hex}"></i>${x.c.label}`, x.r ? `<span class="muted">tin cậy</span> ${Math.round((x.conf || 0) * 100)}% · <span class="muted">cao</span> ${Math.round(x.frac * 100)}%` : '<span class="muted">không thấy</span>']),
+      ['Tỉ lệ plasma/(plasma+hồng cầu)', feat.ratio != null ? (feat.ratio * 100).toFixed(1) + '%' : '–'],
+      ['Số điểm ảnh lấy màu', feat.n.toLocaleString('vi-VN')],
+    ]],
+  ];
+  return groups.map(([t, rows]) => `<div class="pgroup"><div class="pg-t">${t}</div>${rows.map(([k, v]) => `<div class="prow"><span>${k}</span><b>${v}</b></div>`).join('')}</div>`).join('');
+}
+function paramText(name, feat, pred, regions) {
+  const L = feat.L * 100 / 255, a = feat.a - 128, b = feat.b - 128;
+  const st = regionStats(regions).map(x => `${x.c.label}: ${x.r ? Math.round((x.conf || 0) * 100) + '% tin cậy, ' + Math.round(x.frac * 100) + '% chiều cao' : 'không thấy'}`);
+  return [`Ảnh: ${name}`, `Kết luận: ${pred.loai ? 'Loại (độ 3–4)' : 'Nhận (độ 0–2)'} · P(Loại) ${(pred.pLoai * 100).toFixed(1)}% · độ ước tính ${pred.grade}`,
+    `Màu: ${feat.color} · L* ${L.toFixed(1)} · a* ${a.toFixed(1)} · b* ${b.toFixed(1)} · C ${feat.C.toFixed(1)} · RGB ${Math.round(feat.R)},${Math.round(feat.G)},${Math.round(feat.B)} · S ${Math.round(feat.S)} · g_chrom ${feat.g_chrom.toFixed(3)}`,
+    `Khoanh vùng: ${st.join(' · ')}`, `Tỉ lệ plasma: ${feat.ratio != null ? (feat.ratio * 100).toFixed(1) + '%' : '–'} · số điểm ảnh: ${feat.n}`].join('\n');
+}
+const cardTexts = new Map();
+function resultCardHtml({ name, sub = '', url, regions, feat, pred, error, step, extra = '', detail = false, key = '' }) {
+  const head = `<div class="qimg">${url ? `<img src="${esc(url)}" alt="" />${regions?.length ? `<svg viewBox="0 0 1 1" preserveAspectRatio="none">${regionOverlay(regions)}</svg>` : ''}` : '<div class="qwait">…</div>'}</div>`;
   const nm = `<div class="qname">${esc(name)}</div>${sub ? `<div class="muted qsub">${esc(sub)}</div>` : ''}`;
   if (error) return `<div class="qcard">${head}<div class="qbody">${nm}<div class="qerr">⚠ ${esc(error)}</div>${extra}</div></div>`;
   if (!pred) return `<div class="qcard">${head}<div class="qbody">${nm}<div class="muted">${esc(step || 'Đang phân tích…')}</div></div></div>`;
   const m = PlasmaColor.model;
   const bars = pred.probs.map((v, i) => `<div class="qp"><span>Độ ${m.grade.classes[i]}</span><div class="qbar"><i class="cg${m.grade.classes[i]}" style="width:${v * 100}%"></i></div><b>${Math.round(v * 100)}%</b></div>`).join('');
-  return `<div class="qcard">${head}<div class="qbody">${nm}
+  const legend = regions?.length ? `<div class="rlegend">${regionStats(regions).filter(x => x.r).map(x => `<span><i class="rdot" style="background:${x.c.hex}"></i>${x.c.label}</span>`).join('')}</div>` : '';
+  if (key) cardTexts.set(key, paramText(name, feat, pred, regions));
+  const tools = key ? `<div class="qtools"><button class="link" data-detail="${esc(key)}">${detail ? 'Thu gọn ▴' : 'Xem khoanh vùng & thông số ▾'}</button>${detail ? `<button class="link" data-copy="${esc(key)}">📋 Sao chép thông số</button>` : ''}</div>` : '';
+  return `<div class="qcard ${detail ? 'detail' : ''}"><div class="qleft">${head}${detail ? legend : ''}</div><div class="qbody">${nm}
     <div class="qverdict ${pred.loai ? 'loai' : 'nhan'}">${pred.loai ? 'LOẠI' : 'NHẬN'}<small>${pred.loai ? 'đục rõ / nặng (độ 3–4)' : 'trong / đục nhẹ–vừa (độ 0–2)'}</small></div>
     <div class="qline">Xác suất Loại <b>${Math.round(pred.pLoai * 100)}%</b> <span class="muted">(ngưỡng ${Math.round(m.reject.threshold * 100)}%)</span></div>
     <div class="qline">Độ ước tính <span class="gpill" data-g="${pred.grade}">${pred.grade}</span> <span class="muted">${GRADES.find(g => g.g === pred.grade)?.label || ''}</span></div>
     <div class="qprobs">${bars}</div>
-    <div class="qline"><span class="swatch" style="background:rgb(${Math.round(feat.R)},${Math.round(feat.G)},${Math.round(feat.B)})"></span>${esc(feat.color)} <span class="muted">· a ${Math.round(feat.a)} · b ${Math.round(feat.b)} · C ${feat.C.toFixed(1)} · g_chrom ${feat.g_chrom.toFixed(3)}</span></div>
-    ${extra}</div></div>`;
+    ${detail ? `<div class="pgrid">${paramRows(feat, pred, regions)}</div>` : `<div class="qline"><span class="swatch" style="background:rgb(${Math.round(feat.R)},${Math.round(feat.G)},${Math.round(feat.B)})"></span>${esc(feat.color)} <span class="muted">· a ${Math.round(feat.a)} · b ${Math.round(feat.b)} · C ${feat.C.toFixed(1)} · g_chrom ${feat.g_chrom.toFixed(3)}</span></div>`}
+    ${extra}${tools}</div></div>`;
 }
+// nút "chi tiết" / "sao chép" trong các thẻ kết quả
+const detailOpen = new Set(['one']);
+document.addEventListener('click', async e => {
+  const d = e.target.closest('[data-detail]'), c = e.target.closest('[data-copy]');
+  if (d) { const k = d.dataset.detail; detailOpen.has(k) ? detailOpen.delete(k) : detailOpen.add(k); k === 'one' ? colOneRun(colRun) : quickRender(); }
+  if (c) { try { await navigator.clipboard.writeText(cardTexts.get(c.dataset.copy) || ''); toast('Đã sao chép thông số'); } catch { prompt('Thông số:', cardTexts.get(c.dataset.copy) || ''); } }
+});
 const plasmaPoly = regions => { const pl = (regions || []).filter(x => x.name === 'plasma').sort((a, b) => (b.conf || 0) - (a.conf || 0))[0]; return pl ? pl.pts.map(([x, y]) => `${x},${y}`).join(' ') : ''; };
 function colResultCard(r, label) {
   const hum = r.human === null
@@ -2266,7 +2323,7 @@ function colResultCard(r, label) {
     : `Người phân loại (đa số, ${r.rs.length} người): <span class="gpill" data-g="${r.human}">${r.human}</span>${r.pred ? (r.pred.loai === (r.human >= 3) ? (r.pred.grade === r.human ? ' <span class="okc">✓ trùng</span>' : ' <span class="halfc">≈ cùng Nhận/Loại</span>') : ' <span class="badc">✗ khác Nhận/Loại</span>') : ''}`;
   return resultCardHtml({
     name: label, sub: r.batch, url: urlOf(r.im),
-    poly: plasmaPoly(r.feat?.regions || r.im.regions), feat: r.feat, pred: r.pred, error: r.feat?.error,
+    regions: r.feat?.regions || r.im.regions, feat: r.feat, pred: r.pred, error: r.feat?.error, key: 'one', detail: detailOpen.has('one'),
     extra: `<div class="qline">${hum}</div><div><button class="link" data-open="1">Mở ảnh ở tab Phân loại →</button></div>`,
   });
 }
@@ -2284,13 +2341,14 @@ $('#colExport').onclick = () => {
 
 
 // ---------- PHÂN LOẠI NHANH: tải ảnh lên -> AI khoanh vùng -> mô hình màu -> kết quả (không lưu) ----------
-const quickItems = [];
+const quickItems = []; let quickSeq = 0;
 function quickRender() {
   $('#quickHead').classList.toggle('hidden', !quickItems.length);
   const done = quickItems.filter(q => q.res || q.error);
   const nL = done.filter(q => q.res?.pred?.loai).length;
   $('#quickCount').textContent = `${done.length}/${quickItems.length} ảnh · Nhận ${done.length - nL - done.filter(q => q.error).length} · Loại ${nL}`;
-  $('#quickList').innerHTML = quickItems.map(q => resultCardHtml({ name: q.name, url: q.url, poly: q.poly, feat: q.res?.feat, pred: q.res?.pred, error: q.error, step: q.step || 'Đang chờ…' })).join('');
+  quickItems.forEach((q, i) => { q.key ||= 'q' + (++quickSeq); });
+  $('#quickList').innerHTML = quickItems.map(q => resultCardHtml({ name: q.name, url: q.url, regions: q.regions, feat: q.res?.feat, pred: q.res?.pred, error: q.error, step: q.step || 'Đang chờ…', key: q.key, detail: detailOpen.has(q.key) })).join('');
 }
 async function quickAdd(files) {
   files = [...files].filter(isImage);
@@ -2311,10 +2369,8 @@ async function quickAdd(files) {
       const job = colSegLock.then(() => TubeSeg.run(img)); colSegLock = job.catch(() => {});
       const regions = await job;
       if (!regions?.some(r => r.name === 'plasma')) throw new Error('AI không tìm thấy phần huyết tương');
-      const cut = await cropToTube(img, regions, 520);
-      q.url = URL.createObjectURL(cut.blob);
-      const pl = cut.regions.filter(r => r.name === 'plasma').sort((a, b) => b.conf - a.conf)[0];
-      q.poly = pl.pts.map(([x, y]) => `${x},${y}`).join(' ');
+      const cut = await cropToTube(img, regions, 900);
+      q.url = URL.createObjectURL(cut.blob); q.regions = cut.regions;
       const feat = PlasmaColor.analyze(img, regions);
       if (feat.error) throw new Error(feat.error);
       const pred = PlasmaColor.predict(feat);

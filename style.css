@@ -603,3 +603,24 @@ table.matrix td.self, table.matrix td.na { background: #f3f5f7; color: var(--mut
 
 .dr-keep { display: inline-flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; color: var(--ink); cursor: pointer; }
 .dr-keep input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+
+/* ---------- Thẻ kết quả chi tiết ---------- */
+.qleft { flex: none; display: grid; gap: 8px; align-content: start; }
+.qimg polygon { fill: none; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.qimg polygon.pl { fill: rgba(234, 179, 8, .18); stroke-width: 2; }
+.qcard.detail { grid-column: 1 / -1; }
+.qcard.detail .qimg { width: 220px; }
+.quick-list.one { grid-template-columns: 1fr; }
+.quick-list.one .qcard.detail .qimg { width: 240px; }
+.rlegend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: var(--muted); max-width: 240px; }
+.rlegend span { display: inline-flex; align-items: center; gap: 4px; }
+.rdot { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 5px; vertical-align: 0; }
+.pgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; margin-top: 6px; }
+.pgroup { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+.pg-t { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 4px; }
+.prow { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 3px 0; border-top: 1px dashed #eef1f4; }
+.prow:first-of-type { border-top: 0; }
+.prow > span { color: var(--muted); display: inline-flex; align-items: center; }
+.prow > b { font-weight: 600; text-align: right; }
+.prow .tl { color: #c2410c; } .prow .tn { color: #1c5cab; }
+.qtools { display: flex; gap: 14px; margin-top: 4px; }
